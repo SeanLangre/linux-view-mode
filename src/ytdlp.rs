@@ -134,8 +134,7 @@ struct RawThumb {
 }
 
 fn parse_playlist(json: &[u8]) -> Result<Playlist> {
-    let playlist: RawPlaylist =
-        serde_json::from_slice(json).context("unexpected yt-dlp output")?;
+    let playlist: RawPlaylist = serde_json::from_slice(json).context("unexpected yt-dlp output")?;
 
     // Channel pages only name the channel once, at the top level.
     let videos = playlist
@@ -152,7 +151,10 @@ fn parse_playlist(json: &[u8]) -> Result<Playlist> {
                 .unwrap_or_else(|| format!("https://i.ytimg.com/vi/{id}/hqdefault.jpg"));
             Some(Video {
                 title: e.title.unwrap_or_else(|| "Untitled".to_string()),
-                channel: e.channel.or(e.uploader).or_else(|| playlist.channel.clone()),
+                channel: e
+                    .channel
+                    .or(e.uploader)
+                    .or_else(|| playlist.channel.clone()),
                 channel_id: e.channel_id.or_else(|| playlist.channel_id.clone()),
                 duration: e.duration,
                 view_count: e.view_count,
@@ -191,7 +193,10 @@ mod tests {
 
     #[test]
     fn query_cleaning() {
-        assert_eq!(clean_query("  lofi \n beats "), Some("lofi   beats".to_string()));
+        assert_eq!(
+            clean_query("  lofi \n beats "),
+            Some("lofi   beats".to_string())
+        );
         assert_eq!(clean_query(" \t "), None);
         assert_eq!(clean_query(&"x".repeat(500)).unwrap().len(), MAX_QUERY_LEN);
     }

@@ -39,9 +39,61 @@ export default function App() {
   const [stack, setStack] = useState<Entry[]>([{ screen: { kind: 'home' }, focus: START }])
   const [recent, setRecent] = useState(loadRecent)
   const [draft, setDraft] = useState('')
-  const [toast, setToast] = useState<string | null>(null)
-  const toastTimer = useRef<number | undefined>(undefined)
   const inputRef = useRef<HTMLInputElement>(null)
+  const [playback, setPlayback] = useState<api.PlayerStatus | null>(null)
+  const [playbackError, setPlaybackError] = useState<string | null>(null)
+  const [starting, setStarting] = useState(false)
+  const startingRef = useRef(false)
+  const selectedTitle = useRef<{ id: string; title: string } | null>(null)
+  const playbackRevision = useRef(0)
+
+  useEffect(() => {
+    let cancelled = false
+    let timer: number
+    async function poll() {
+      const revision = playbackRevision.current
+      try {
+        const status = await api.playerStatus()
+        if (!cancelled && revision === playbackRevision.current && !startingRef.current) {
+          setPlayback(status)
+          setPlaybackError(status.error)
+        }
+      } catch (err) {
+        if (!cancelled) setPlaybackError((err as Error).message)
+      }
+      if (!cancelled) timer = window.setTimeout(poll, 1000)
+    }
+    void poll()
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [])
+
+  async function startVideo(video: Video) {
+    if (startingRef.current) return
+    startingRef.current = true
+    playbackRevision.current++
+    setStarting(true)
+    setPlaybackError(null)
+    selectedTitle.current = { id: video.id, title: video.title }
+    try {
+      await api.play(video.id)
+      setPlayback({ playing: true, id: video.id, title: video.title,
+        position: null, duration: null, paused: false, error: null })
+    } catch (err) {
+      setPlaybackError((err as Error).message)
+    } finally {
+      startingRef.current = false
+      setStarting(false)
+    }
+  }
+
+  async function stopVideo() {
+    playbackRevision.current++
+    try {
+      await api.stop()
+      setPlayback(null)
+      setPlaybackError(null)
+    } catch (err) { setPlaybackError((err as Error).message) }
+  }
 
   const { screen } = stack[stack.length - 1]
   const key = screenKey(screen)
@@ -114,12 +166,6 @@ export default function App() {
     push({ kind: 'channel', id: video.channel_id, name: video.channel })
   }
 
-  function showToast(message: string) {
-    setToast(message)
-    window.clearTimeout(toastTimer.current)
-    toastTimer.current = window.setTimeout(() => setToast(null), 2500)
-  }
-
   function activate() {
     switch (focusedRow?.kind) {
       case 'search-button':
@@ -129,7 +175,7 @@ export default function App() {
         runSearch(focusedRow.items[focus.col])
         break
       case 'videos':
-        showToast(`Playback arrives in Phase 3 · ${focusedVideo()?.title}`)
+        { const video = focusedVideo(); if (video) void startVideo(video) }
         break
     }
   }
@@ -137,6 +183,16 @@ export default function App() {
   // Re-registered every render so the handler always sees current state.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      // Keep the browsing position until mpv exits, including when Firefox retains focus.
+      if (starting || playback?.playing) {
+        if (e.key === 'Escape' || e.key === 'Backspace') {
+          e.preventDefault()
+          if (!starting) void stopVideo()
+        } else if (ARROWS[e.key] || ['Enter', '/', 'Home', 'c'].includes(e.key)) {
+          e.preventDefault()
+        }
+        return
+      }
       if (document.activeElement === inputRef.current) {
         // Typing: only leave the input with ↓ or Esc; Enter submits the form.
         if (e.key === 'ArrowDown') {
@@ -248,7 +304,16 @@ export default function App() {
         {stack.length > 1 && <span><kbd>Esc</kbd>Back</span>}
       </footer>
 
-      {toast && <div className="toast">{toast}</div>}
+      {(starting || playback?.playing) && (
+        <div className="toast" role="status">
+          {starting ? 'Starting' : 'Playing'}: {playback?.title
+            ?? (playback?.id === selectedTitle.current?.id ? selectedTitle.current?.title : playback?.id)
+            ?? selectedTitle.current?.title}
+          {playback?.paused && ' · Paused'}
+          {' · Esc to stop'}
+        </div>
+      )}
+      {playbackError && <div className="toast error" role="alert">{playbackError}</div>}
     </main>
   )
 }

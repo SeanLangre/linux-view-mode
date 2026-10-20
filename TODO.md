@@ -7,15 +7,15 @@ Checklist for [`plan.md`](plan.md). Tick items as they're done.
 - [ ] Try the Phase 2 interface in `firefox --kiosk` on the dev machine (fonts, focus ring, smooth scrolling, scrollbar hidden)
 - [ ] Commit Phase 2
 
-## Phase 3 — Playback (next)
+## Phase 3 — Playback (implemented; desktop check pending)
 
-- [ ] `src/player.rs`: start mpv fullscreen (`--hwdec=vaapi`, 1080p cap, IPC socket), one player at a time, kill on stop
-- [ ] Read `time-pos` / `duration` over the mpv IPC socket
-- [ ] `config/mpv/input.conf`: Esc and `q` quit, arrow seeks, `i` overlay
-- [ ] `config/mpv/mpv.conf`: format cap, hwdec, OSD size readable from the couch
-- [ ] SponsorBlock mpv script
-- [ ] API: `POST /api/play {id, start?}`, `POST /api/stop`, `GET /api/status`
-- [ ] UI: Enter calls `/api/play`; show "Playing: <title>" while mpv runs; return to the same card afterwards
+- [x] `src/player.rs`: start mpv fullscreen (`--hwdec=vaapi`, 1080p cap, IPC socket), one player at a time, kill on stop
+- [x] Read `time-pos` / `duration` over the mpv IPC socket
+- [x] `config/mpv/input.conf`: Esc and `q` quit, arrow seeks, `i` overlay
+- [x] `config/mpv/mpv.conf`: format cap, hwdec, OSD size readable from the couch
+- [x] SponsorBlock mpv script
+- [x] API: `POST /api/play {id, start?}`, `POST /api/stop`, `GET /api/status`
+- [x] UI: Enter calls `/api/play`; show "Playing: <title>" while mpv runs; return to the same card afterwards
 - [ ] Check on the dev machine (KDE Wayland): mpv opens above the Firefox kiosk and focus returns when it quits; add a KWin rule if not
 
 ## Server setup (whenever ready, on the RN96)

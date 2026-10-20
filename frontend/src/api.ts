@@ -41,3 +41,27 @@ export const search = (query: string) =>
 
 export const channel = (id: string) =>
   get<Channel>(`/api/channel/${encodeURIComponent(id)}`)
+
+export type PlayerStatus = {
+  playing: boolean
+  id: string | null
+  title: string | null
+  position: number | null
+  duration: number | null
+  paused: boolean
+  error: string | null
+}
+
+// Playback state must never use the search cache.
+async function playback<T>(path: string, body?: object): Promise<T> {
+  const res = await fetch(`/api/${path}`, body === undefined
+    ? { cache: 'no-store' }
+    : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const data = await res.json().catch(() => null)
+  if (!res.ok) throw new Error(data?.error ?? `request failed (${res.status})`)
+  return data as T
+}
+
+export const play = (id: string, start?: number) => playback('play', { id, start })
+export const stop = () => playback('stop', {})
+export const playerStatus = () => playback<PlayerStatus>('status')

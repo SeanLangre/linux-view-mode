@@ -11,7 +11,7 @@ The original chat transcript this plan came from is kept in `plan.chat.md`. How 
 | 0 — Server checks | Not started (needs the Arch install) |
 | 1 — Backend skeleton | ✅ Done |
 | 2 — TV interface | ✅ Done (still to try in `firefox --kiosk`) |
-| 3 — Playback | **Next** |
+| 3 — Playback | Implemented; Firefox/KDE Wayland check pending |
 | 4–7 | Not started |
 
 ---
@@ -127,21 +127,21 @@ src/
   api.rs                   ✅ HTTP handlers
   ytdlp.rs                 ✅ running yt-dlp: search, channel (later: feeds, mark-watched)
   profiles.rs              # profiles, Firefox profile setup, sign-in, login check, refresh
-  player.rs                # mpv process + IPC (one player at a time)
+  player.rs                ✅ mpv process + IPC (one player at a time)
   db.rs                    # SQLite schema + queries
 frontend/                  ✅ Vite + React + TS
   src/App.tsx              ✅ screens, back stack, keyboard handling
   src/nav.ts               ✅ 2D focus logic (unit-tested in nav.test.ts)
   src/api.ts               ✅ API client with a 10-minute cache
   src/styles.css           ✅ 10-foot styling (1rem = 1/80 of screen width)
-  config/
-    mpv/           # mpv.conf, input.conf, scripts/sponsorblock
-    firefox/       # policies.json (force-installs uBlock Origin + SponsorBlock), user.js
-  deploy/
-    install.sh                         # build + install on the server
-    couchtube.service                  # backend
-    couchtube-kiosk.service            # Firefox kiosk
-    couchtube-refresh.{service,timer}  # daily cookie refresh
+config/
+  mpv/                     ✅ mpv.conf, input.conf, scripts/sponsorblock.lua
+  firefox/                 # policies.json (force-installs uBlock Origin + SponsorBlock), user.js
+deploy/
+  install.sh                         # build + install on the server
+  couchtube.service                  # backend
+  couchtube-kiosk.service            # Firefox kiosk
+  couchtube-refresh.{service,timer}  # daily cookie refresh
 ```
 
 ### Crates
@@ -163,8 +163,8 @@ React 19 + TypeScript + Vite 8, tested with vitest, linted with oxlint. No UI li
 | GET | `/api/feed/:kind` | `recommended`, `subscriptions`, `history`, `watchlater`, `liked` |
 | GET | `/api/search?q=&limit=` ✅ | Search (default 24, max 50 results) |
 | GET | `/api/channel/:id` ✅ | Channel name + latest 24 uploads |
-| POST | `/api/play` `{id, start?}` / `/api/stop` | Start or stop mpv |
-| GET | `/api/status` | Now playing: title and position |
+| POST | `/api/play` `{id, start?}` / `/api/stop` ✅ | Start or stop mpv |
+| GET | `/api/status` ✅ | Process running, video ID, title, position, duration, pause and error |
 | GET/POST/DELETE | `/api/queue` | Queue for the active profile |
 | POST | `/api/fallback/youtube-tv` | Open youtube.com/tv in the active profile's Firefox |
 | POST | `/api/system/exit` | Close kiosk and go back to the desktop |
@@ -263,11 +263,12 @@ Tested by driving the built app in headless Chromium at 1920×1080 with real key
 - Known quirk: after the first search, going back to Home can land on the new "Recent searches" row instead of the video row you left, because that row is inserted above it.
 - **Done when:** you can search and browse with the keyboard only, in `firefox --kiosk`.
 
-### Phase 3 — Playback ← next
-- `player.rs`: mpv with `--fullscreen --hwdec=vaapi --ytdl-format=… --input-ipc-server=$XDG_RUNTIME_DIR/couchtube-mpv.sock --config-dir=…`, one player at a time, reads `time-pos` and `duration` over IPC.
-- SponsorBlock mpv script.
+### Phase 3 — Playback — implemented, desktop check pending
+Backend tests cover process replacement, stop, failed exits and IPC replies; frontend tests cover playback requests and uncached status. A headless smoke test with real mpv and local audio passed (API validation, title/position/pause, replacement, quit, stop and backend shutdown). SponsorBlock has a Lua test for skipping and failure handling. The Firefox kiosk/KDE stacking and focus check remains manual.
+- `player.rs`: mpv with `--fullscreen --hwdec=vaapi --ytdl-format=… --input-ipc-server=$XDG_RUNTIME_DIR/couchtube-<session>/ipc --config-dir=…`, one player at a time, reads `time-pos` and `duration` over IPC.
+- SponsorBlock mpv script (paid sponsor segments; `curl`, asynchronous, leaves playback running on failure).
 - The UI shows "Playing: <title>" while mpv runs.
-- Replace the "Playback arrives in Phase 3" message with a call to `/api/play`.
+- Enter calls `/api/play`; status is polled without caching, and the screen/focus stay in place during playback.
 - Browser test: Firefox kiosk + mpv on top on KDE Wayland can be checked on the dev machine already (same desktop as the server).
 - **Done when:** Enter plays, Esc returns to the same card.
 
