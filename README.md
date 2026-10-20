@@ -168,5 +168,4 @@ config/mpv/     Playback settings, keys, SponsorBlock script
 config/firefox/ Account preferences and extension policy
 plan.md         Design and roadmap
 TODO.md         Checklist
-plan.chat.md    The original chat this project came from
 ```

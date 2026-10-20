@@ -2,7 +2,7 @@
 
 A fullscreen, keyboard-only YouTube interface for the Arch Linux server connected to the TV over HDMI. It should feel like an appliance: it boots into a "Who's watching?" screen, you pick your Google account, browse your own recommendations and subscriptions with the arrow keys, and videos play fullscreen at up to 1080p with **no ads**. You never need a mouse, a terminal, or a browser tab.
 
-The original chat transcript this plan came from is kept in `plan.chat.md`. How to run the code is in `README.md`; the working checklist is `TODO.md`.
+How to run the code is in `README.md`; the working checklist is `TODO.md`.
 
 ### Status (2026-10-20)
 | Phase | State |
