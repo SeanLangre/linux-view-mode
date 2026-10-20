@@ -25,14 +25,42 @@ pub struct Video {
     pub thumb: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct Channel {
+    pub id: String,
+    pub name: Option<String>,
+    pub videos: Vec<Video>,
+}
+
 /// Searches YouTube (signed out) and returns up to `limit` videos.
 pub async fn search(query: &str, limit: u32) -> Result<Vec<Video>> {
-    let json = run(&format!("ytsearch{limit}:{query}")).await?;
-    parse_playlist(&json)
+    let json = run(&format!("ytsearch{limit}:{query}"), &[]).await?;
+    Ok(parse_playlist(&json)?.videos)
+}
+
+/// A channel's latest `limit` uploads. `id` must pass `is_channel_id`.
+pub async fn channel(id: &str, limit: u32) -> Result<Channel> {
+    debug_assert!(is_channel_id(id));
+    let url = format!("https://www.youtube.com/channel/{id}/videos");
+    let json = run(&url, &["--playlist-end", &limit.to_string()]).await?;
+    let playlist = parse_playlist(&json)?;
+    Ok(Channel {
+        id: id.to_string(),
+        name: playlist.channel,
+        videos: playlist.videos,
+    })
 }
 
 pub fn is_video_id(id: &str) -> bool {
     id.len() == 11
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+pub fn is_channel_id(id: &str) -> bool {
+    id.len() == 24
+        && id.starts_with("UC")
         && id
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
@@ -49,9 +77,11 @@ pub fn clean_query(raw: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-async fn run(target: &str) -> Result<Vec<u8>> {
+async fn run(target: &str, extra_args: &[&str]) -> Result<Vec<u8>> {
     let child = Command::new("yt-dlp")
-        .args(["--flat-playlist", "-J", "--no-warnings", "--"])
+        .args(["--flat-playlist", "-J", "--no-warnings"])
+        .args(extra_args)
+        .arg("--")
         .arg(target)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -73,8 +103,15 @@ async fn run(target: &str) -> Result<Vec<u8>> {
 
 #[derive(Deserialize)]
 struct RawPlaylist {
+    channel: Option<String>,
+    channel_id: Option<String>,
     #[serde(default)]
     entries: Vec<RawEntry>,
+}
+
+struct Playlist {
+    channel: Option<String>,
+    videos: Vec<Video>,
 }
 
 #[derive(Deserialize)]
@@ -96,11 +133,12 @@ struct RawThumb {
     width: Option<u32>,
 }
 
-fn parse_playlist(json: &[u8]) -> Result<Vec<Video>> {
+fn parse_playlist(json: &[u8]) -> Result<Playlist> {
     let playlist: RawPlaylist =
         serde_json::from_slice(json).context("unexpected yt-dlp output")?;
 
-    Ok(playlist
+    // Channel pages only name the channel once, at the top level.
+    let videos = playlist
         .entries
         .into_iter()
         .filter_map(|e| {
@@ -114,15 +152,20 @@ fn parse_playlist(json: &[u8]) -> Result<Vec<Video>> {
                 .unwrap_or_else(|| format!("https://i.ytimg.com/vi/{id}/hqdefault.jpg"));
             Some(Video {
                 title: e.title.unwrap_or_else(|| "Untitled".to_string()),
-                channel: e.channel.or(e.uploader),
-                channel_id: e.channel_id,
+                channel: e.channel.or(e.uploader).or_else(|| playlist.channel.clone()),
+                channel_id: e.channel_id.or_else(|| playlist.channel_id.clone()),
                 duration: e.duration,
                 view_count: e.view_count,
                 thumb,
                 id,
             })
         })
-        .collect())
+        .collect();
+
+    Ok(Playlist {
+        channel: playlist.channel,
+        videos,
+    })
 }
 
 #[cfg(test)]
@@ -136,6 +179,14 @@ mod tests {
         assert!(!is_video_id("short"));
         assert!(!is_video_id("UCSJ4gkVC6NrvII8umztf0Ow"));
         assert!(!is_video_id("--exec=rm -"));
+    }
+
+    #[test]
+    fn channel_id_validation() {
+        assert!(is_channel_id("UCSMOQeBJ2RAnuFungnQOxLg"));
+        assert!(!is_channel_id("XXSMOQeBJ2RAnuFungnQOxLg"));
+        assert!(!is_channel_id("UC/../../etc/passwd/xxxxx"));
+        assert!(!is_channel_id("rFZHOHl-L8A"));
     }
 
     #[test]
@@ -167,7 +218,7 @@ mod tests {
             ]
         }"#;
 
-        let videos = parse_playlist(json).unwrap();
+        let videos = parse_playlist(json).unwrap().videos;
         assert_eq!(videos.len(), 2);
         assert_eq!(videos[0].thumb, "https://i.ytimg.com/big.jpg");
         assert_eq!(videos[0].duration, None);
@@ -177,5 +228,23 @@ mod tests {
             videos[1].thumb,
             "https://i.ytimg.com/vi/aqz-KE-bpKQ/hqdefault.jpg"
         );
+    }
+
+    #[test]
+    fn channel_entries_inherit_channel() {
+        let json = br#"{
+            "channel": "Blender",
+            "channel_id": "UCSMOQeBJ2RAnuFungnQOxLg",
+            "entries": [{"id": "sO_lhW8av3U", "title": "Recap", "duration": 149}]
+        }"#;
+
+        let playlist = parse_playlist(json).unwrap();
+        assert_eq!(playlist.channel.as_deref(), Some("Blender"));
+        assert_eq!(playlist.videos[0].channel.as_deref(), Some("Blender"));
+        assert_eq!(
+            playlist.videos[0].channel_id.as_deref(),
+            Some("UCSMOQeBJ2RAnuFungnQOxLg")
+        );
+        assert_eq!(playlist.videos[0].duration, Some(149.0));
     }
 }

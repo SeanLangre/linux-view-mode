@@ -2,7 +2,7 @@
 
 use axum::{
     Json, Router,
-    extract::Query,
+    extract::{Path, Query},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::get,
@@ -10,7 +10,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::ytdlp::{self, Video};
+use crate::ytdlp::{self, Channel, Video};
 
 const DEFAULT_LIMIT: u32 = 24;
 const MAX_LIMIT: u32 = 50;
@@ -19,6 +19,7 @@ pub fn router() -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/search", get(search))
+        .route("/channel/{id}", get(channel))
         // Without this, unknown /api paths would fall through to the frontend's index.html.
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "no such endpoint") })
 }
@@ -42,6 +43,17 @@ async fn search(Query(params): Query<SearchParams>) -> Result<Json<Vec<Video>>, 
     ytdlp::search(&query, limit).await.map(Json).map_err(|err| {
         tracing::error!("search for {query:?} failed: {err:#}");
         ApiError::new(StatusCode::BAD_GATEWAY, "search failed, try again")
+    })
+}
+
+async fn channel(Path(id): Path<String>) -> Result<Json<Channel>, ApiError> {
+    if !ytdlp::is_channel_id(&id) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid channel id"));
+    }
+
+    ytdlp::channel(&id, DEFAULT_LIMIT).await.map(Json).map_err(|err| {
+        tracing::error!("channel {id} failed: {err:#}");
+        ApiError::new(StatusCode::BAD_GATEWAY, "could not load channel, try again")
     })
 }
 

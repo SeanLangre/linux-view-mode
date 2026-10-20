@@ -2,7 +2,17 @@
 
 A fullscreen, keyboard-only YouTube interface for the Arch Linux server connected to the TV over HDMI. It should feel like an appliance: it boots into a "Who's watching?" screen, you pick your Google account, browse your own recommendations and subscriptions with the arrow keys, and videos play fullscreen at up to 1080p with **no ads**. You never need a mouse, a terminal, or a browser tab.
 
-The original chat transcript this plan came from is kept in `plan.chat.md`.
+The original chat transcript this plan came from is kept in `plan.chat.md`. How to run the code is in `README.md`; the working checklist is `TODO.md`.
+
+### Status (2026-10-20)
+| Phase | State |
+|---|---|
+| Server setup (Windows → Arch) | Not started |
+| 0 — Server checks | Not started (needs the Arch install) |
+| 1 — Backend skeleton | ✅ Done |
+| 2 — TV interface | ✅ Done (still to try in `firefox --kiosk`) |
+| 3 — Playback | **Next** |
+| 4–7 | Not started |
 
 ---
 
@@ -109,17 +119,21 @@ All with `--flat-playlist -J --playlist-end N`. Results are cached per profile (
 ```
 
 ### Repo layout
+The repo root is the Rust project. ✅ = exists today.
 ```
-couchtube/
-  Cargo.toml
-  src/
-    main.rs        # config, router, static files
-    api.rs         # HTTP handlers
-    profiles.rs    # profiles, Firefox profile setup, sign-in, login check, refresh
-    ytdlp.rs       # running yt-dlp: feeds, search, channel, mark-watched, cache
-    player.rs      # mpv process + IPC (one player at a time)
-    db.rs          # SQLite schema + queries
-  frontend/        # Vite + React + TS
+Cargo.toml                 ✅
+src/
+  main.rs                  ✅ config, router, static files
+  api.rs                   ✅ HTTP handlers
+  ytdlp.rs                 ✅ running yt-dlp: search, channel (later: feeds, mark-watched)
+  profiles.rs              # profiles, Firefox profile setup, sign-in, login check, refresh
+  player.rs                # mpv process + IPC (one player at a time)
+  db.rs                    # SQLite schema + queries
+frontend/                  ✅ Vite + React + TS
+  src/App.tsx              ✅ screens, back stack, keyboard handling
+  src/nav.ts               ✅ 2D focus logic (unit-tested in nav.test.ts)
+  src/api.ts               ✅ API client with a 10-minute cache
+  src/styles.css           ✅ 10-foot styling (1rem = 1/80 of screen width)
   config/
     mpv/           # mpv.conf, input.conf, scripts/sponsorblock
     firefox/       # policies.json (force-installs uBlock Origin + SponsorBlock), user.js
@@ -131,18 +145,24 @@ couchtube/
 ```
 
 ### Crates
-`axum`, `tokio` (full), `tower-http` (fs), `serde`, `serde_json`, `rusqlite` (bundled), `anyhow`, `tracing`, `tracing-subscriber`.
+In use: `axum` 0.8, `tokio` (full), `tower-http` (fs, trace), `serde`, `serde_json`, `anyhow`, `tracing`, `tracing-subscriber` (env-filter).
+Still to add: `rusqlite` (bundled) in Phase 4/5.
+
+### Frontend
+React 19 + TypeScript + Vite 8, tested with vitest, linted with oxlint. No UI library: the app is one screen stack and a row/column focus model.
 
 ### API (first version)
+✅ = implemented.
 | Method | Path | Purpose |
 |---|---|---|
+| GET | `/api/health` ✅ | `{"status":"ok"}` |
 | GET/POST/DELETE | `/api/profiles` | List / create / remove profiles |
 | POST | `/api/profiles/:id/select` | Set the active profile |
 | POST | `/api/profiles/:id/signin` | Open the sign-in window |
 | GET | `/api/profiles/:id/status` | Is the login valid? |
 | GET | `/api/feed/:kind` | `recommended`, `subscriptions`, `history`, `watchlater`, `liked` |
-| GET | `/api/search?q=` | Search |
-| GET | `/api/channel/:id` | Channel uploads |
+| GET | `/api/search?q=&limit=` ✅ | Search (default 24, max 50 results) |
+| GET | `/api/channel/:id` ✅ | Channel name + latest 24 uploads |
 | POST | `/api/play` `{id, start?}` / `/api/stop` | Start or stop mpv |
 | GET | `/api/status` | Now playing: title and position |
 | GET/POST/DELETE | `/api/queue` | Queue for the active profile |
@@ -159,6 +179,7 @@ couchtube/
 - Backend binds to **127.0.0.1 only** (it starts processes and holds account access).
 - Validate video IDs (`^[A-Za-z0-9_-]{11}$`) and channel IDs (`^UC[A-Za-z0-9_-]{22}$`). Always build URLs yourself. Never use a shell. Put `--` before positional arguments.
 - Profile folders `0700`. Never log cookies.
+- Errors go to the UI as `{"error": "..."}` with short, user-readable messages; details stay in the server log.
 
 ---
 
@@ -169,8 +190,9 @@ couchtube/
 |---|---|
 | ← ↑ → ↓ | Move between cards (rows and columns) |
 | Enter | Play / open |
-| Esc / Backspace | Back (on Home: open the profile picker) |
+| Esc / Backspace | Back (on Home: open the profile picker, from Phase 4) |
 | `/` | Jump to search |
+| `c` | Open the selected video's channel |
 | `a` | Add the selected video to the queue |
 | `p` | Switch profile |
 | Home | Go to the home screen |
@@ -227,20 +249,26 @@ Phases 1–5 run on the dev machine, so they don't have to wait for the server's
 - **Done when:** everything works, or each problem has a known fix.
 
 ### Phase 1 — Backend skeleton (dev machine) ✅ done 2026-10-20
-- `cargo new couchtube`, Axum on `127.0.0.1:7878`, `ytdlp.rs` with search signed out, `/api/search`, serves `frontend/dist`.
+- Axum on `127.0.0.1:7878`, `ytdlp.rs` with search signed out, `/api/search`, serves `frontend/dist`.
+- Measured: yt-dlp search takes about 1.2 s on the dev machine.
 - **Done when:** `curl '127.0.0.1:7878/api/search?q=lofi'` returns clean JSON.
 
-### Phase 2 — TV interface
+### Phase 2 — TV interface ✅ done 2026-10-20
+Tested by driving the built app in headless Chromium at 1920×1080 with real key presses; still to try in `firefox --kiosk`. Added `/api/channel/:id` for the Channel screen.
 - Vite + React + TS. Dev proxy `/api` → `:7878`.
 - Screens: Home, Search, Results, Channel.
 - 2D grid navigation: a visible focus ring, the focused card scrolled into view, and a remembered focus position per screen.
 - 10-foot styling: dark theme, large text (≥ 24 px at 1080p), 16:9 thumbnails, nothing important near the screen edges, light on the RN96's GPU.
+- Home shows placeholder rows (Music, Nature, Science & tech) plus recent searches until Phase 5 brings the account feeds. Enter on a video shows a "Playback arrives in Phase 3" message.
+- Known quirk: after the first search, going back to Home can land on the new "Recent searches" row instead of the video row you left, because that row is inserted above it.
 - **Done when:** you can search and browse with the keyboard only, in `firefox --kiosk`.
 
-### Phase 3 — Playback
+### Phase 3 — Playback ← next
 - `player.rs`: mpv with `--fullscreen --hwdec=vaapi --ytdl-format=… --input-ipc-server=$XDG_RUNTIME_DIR/couchtube-mpv.sock --config-dir=…`, one player at a time, reads `time-pos` and `duration` over IPC.
 - SponsorBlock mpv script.
 - The UI shows "Playing: <title>" while mpv runs.
+- Replace the "Playback arrives in Phase 3" message with a call to `/api/play`.
+- Browser test: Firefox kiosk + mpv on top on KDE Wayland can be checked on the dev machine already (same desktop as the server).
 - **Done when:** Enter plays, Esc returns to the same card.
 
 ### Phase 4 — Profiles and sign-in
