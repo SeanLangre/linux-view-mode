@@ -107,6 +107,21 @@ def main():
                 wait_for(ready)
                 assert request("stop", {})[0] == 200
                 assert request("status")[1]["playing"] is False
+                # Exercise real mpv's end-file event, not only the IPC fixture.
+                request("queue", {"id": "rFZHOHl-L8A"})
+                assert request("play", {"id": "aqz-KE-bpKQ", "start": 29.8})[0] == 200
+                wait_for(ready)
+                ipc = next(directory.glob("couchtube-*/ipc"))
+                with socket.socket(socket.AF_UNIX) as connection:
+                    connection.connect(str(ipc))
+                    connection.sendall(b'{"command":["set_property","pause",false]}\n')
+                    # Let mpv consume the command before closing this test connection.
+                    with connection.makefile("r") as reader:
+                        reader.readline()
+                wait_for(lambda: request("status")[1]["id"] == "rFZHOHl-L8A")
+                wait_for(ready)
+                assert request("queue")[1] == []
+                assert request("stop", {})[0] == 200
                 profile = request("profiles", {"name": "IPC cookie test"})[1]
                 cookie_folder = directory / "data, profiles/profiles" / profile["id"] / "firefox"
                 (cookie_folder / "cookies.sqlite").touch()
@@ -132,7 +147,7 @@ def main():
                 log.flush()
                 contents = log_path.read_text()
                 assert "Error parsing" not in contents and "Lua error" not in contents, contents
-                print("Playback smoke passed: validation, real mpv IPC/title/position/pause, replacement, quit, stop, shutdown.")
+                print("Playback smoke passed: validation, real mpv IPC/title/position/pause, replacement, quit, EOF queue advancement, stop, shutdown.")
             except BaseException:
                 log.flush()
                 print(log_path.read_text())

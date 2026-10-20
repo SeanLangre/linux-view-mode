@@ -31,12 +31,13 @@ describe('playback API', () => {
 
 // Account switching must not reuse another person's searches.
 describe('profile cache', () => {
-  it('keeps in-flight responses and cached results scoped to their profile', async () => {
+  it('drops in-flight browser cache entries when changing profiles', async () => {
     const { search, setProfileScope } = await import('./api')
     let finishAlice!: (value: unknown) => void
     const fetcher = vi.fn()
       .mockImplementationOnce(() => new Promise((resolve) => { finishAlice = resolve }))
       .mockResolvedValueOnce({ ok: true, json: async () => [{ id: 'bob-result' }] })
+      .mockResolvedValueOnce({ ok: true, json: async () => [{ id: 'alice-fresh-result' }] })
     vi.stubGlobal('fetch', fetcher)
     setProfileScope('alice')
     const alice = search('isolated-cache-test')
@@ -47,8 +48,31 @@ describe('profile cache', () => {
     expect(bob).toEqual([{ id: 'bob-result' }])
     expect(await search('isolated-cache-test')).toEqual(bob)
     setProfileScope('alice')
-    expect(await search('isolated-cache-test')).toEqual([{ id: 'alice-result' }])
-    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(await search('isolated-cache-test')).toEqual([{ id: 'alice-fresh-result' }])
+    expect(fetcher).toHaveBeenCalledTimes(3)
     setProfileScope('guest')
+  })
+})
+
+
+describe('feeds and queue API', () => {
+  it('does not cache feeds or queue state in the browser and posts queue actions', async () => {
+    const { feed, queue, enqueue, next, deleteQueue } = await import('./api')
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, json: async () => [] })
+    vi.stubGlobal('fetch', fetcher)
+    await feed('history')
+    await feed('history', true)
+    await queue()
+    await enqueue('aqz-KE-bpKQ')
+    await next()
+    await deleteQueue('aqz-KE-bpKQ')
+    await deleteQueue()
+    expect(fetcher.mock.calls[0]).toEqual(['/api/feed/history', { cache: 'no-store' }])
+    expect(fetcher.mock.calls[1]).toEqual(['/api/feed/history?refresh=true', { cache: 'no-store' }])
+    expect(fetcher.mock.calls[2]).toEqual(['/api/queue', { cache: 'no-store' }])
+    expect(fetcher.mock.calls[3][1].body).toBe(JSON.stringify({ id: 'aqz-KE-bpKQ' }))
+    expect(fetcher.mock.calls[4][0]).toBe('/api/next')
+    expect(fetcher.mock.calls[5]).toEqual(['/api/queue/aqz-KE-bpKQ', { method: 'DELETE' }])
+    expect(fetcher.mock.calls[6]).toEqual(['/api/queue', { method: 'DELETE' }])
   })
 })

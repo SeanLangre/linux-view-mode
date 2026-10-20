@@ -19,12 +19,13 @@ use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub player: Player,
+    pub playback: crate::playback::Playback,
+    pub feeds: crate::feeds::Feeds,
     pub profiles: Profiles,
     pub transition: Arc<Mutex<()>>,
 }
 
-use crate::player::{Player, Status};
+use crate::player::Status;
 use crate::ytdlp::{self, Channel, Video};
 
 const DEFAULT_LIMIT: u32 = 24;
@@ -41,6 +42,10 @@ pub fn router(state: AppState) -> Router {
         .route("/play", post(play))
         .route("/stop", post(stop))
         .route("/status", get(status))
+        .route("/feed/{kind}", get(feed))
+        .route("/queue", get(queue).post(enqueue).delete(clear_queue))
+        .route("/queue/{id}", axum::routing::delete(remove_queue))
+        .route("/next", post(next))
         .route("/search", get(search))
         .route("/channel/{id}", get(channel))
         // Without this, unknown /api paths would fall through to the frontend's index.html.
@@ -71,8 +76,9 @@ async fn search(
         let _transition = state.transition.lock().await;
         state.profiles.active().await.map_err(internal)?
     };
-    let _request = account.gate.lock().await;
-    ytdlp::search(&query, limit, account.cookies())
+    state
+        .feeds
+        .search(&account, &query, limit)
         .await
         .map(Json)
         .map_err(|err| {
@@ -93,8 +99,9 @@ async fn channel(
         let _transition = state.transition.lock().await;
         state.profiles.active().await.map_err(internal)?
     };
-    let _request = account.gate.lock().await;
-    ytdlp::channel(&id, DEFAULT_LIMIT, account.cookies())
+    state
+        .feeds
+        .channel(&account, &id)
         .await
         .map(Json)
         .map_err(|err| {
@@ -159,8 +166,8 @@ async fn play(
         ));
     }
     state
-        .player
-        .play(&request.id, request.start, account.cookies())
+        .playback
+        .play(account, &request.id, request.start)
         .await
         .map_err(|err| {
             tracing::error!("could not start playback: {err:#}");
@@ -173,7 +180,8 @@ async fn play(
 }
 
 async fn stop(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
-    state.player.stop().await.map_err(|err| {
+    let _transition = state.transition.lock().await;
+    state.playback.stop().await.map_err(|err| {
         tracing::error!("could not stop mpv: {err:#}");
         ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not stop playback")
     })?;
@@ -181,20 +189,26 @@ async fn stop(State(state): State<AppState>) -> Result<Json<serde_json::Value>, 
 }
 
 async fn status(State(state): State<AppState>) -> Result<Json<Status>, ApiError> {
-    state.player.status().await.map(Json).map_err(|err| {
-        tracing::error!("could not read mpv status: {err:#}");
-        ApiError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "could not read playback status",
-        )
-    })
+    state
+        .playback
+        .player
+        .status()
+        .await
+        .map(Json)
+        .map_err(|err| {
+            tracing::error!("could not read mpv status: {err:#}");
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not read playback status",
+            )
+        })
 }
 
 fn internal(err: anyhow::Error) -> ApiError {
-    tracing::error!("profile operation failed: {err:#}");
+    tracing::error!("backend operation failed: {err:#}");
     ApiError::new(
         StatusCode::INTERNAL_SERVER_ERROR,
-        "could not update profiles, check the server log",
+        "could not complete the request, check the server log",
     )
 }
 
@@ -260,8 +274,9 @@ async fn select_profile(
             "close the sign-in window and wait for the login check first",
         ));
     }
-    state.player.stop().await.map_err(internal)?;
+    state.playback.stop().await.map_err(internal)?;
     state.profiles.db.select(&id).await.map_err(internal)?;
+    state.feeds.prefetch(account.clone());
     Ok(Json(account.profile))
 }
 
@@ -284,7 +299,7 @@ async fn remove_profile(
         ));
     }
     if state.profiles.db.active().await.map_err(internal)?.id == id {
-        state.player.stop().await.map_err(internal)?;
+        state.playback.stop().await.map_err(internal)?;
     }
     state.profiles.remove(&account).await.map_err(internal)?;
     Ok(Json(json!({"status": "removed"})))
@@ -310,8 +325,9 @@ async fn signin(
     }
     // Don't rotate cookies while this profile is playing a video.
     if state.profiles.db.active().await.map_err(internal)?.id == id {
-        state.player.stop().await.map_err(internal)?;
+        state.playback.stop().await.map_err(internal)?;
     }
+    state.profiles.db.invalidate(&id).await.map_err(internal)?;
     state.profiles.signin(account).await.map_err(|_| {
         ApiError::new(
             StatusCode::BAD_GATEWAY,
@@ -339,4 +355,120 @@ async fn login_status(
         state.profiles.start_check(account).await;
     }
     Ok(Json(state.profiles.login_status(&id).await))
+}
+
+#[derive(Deserialize)]
+struct FeedQuery {
+    #[serde(default)]
+    refresh: bool,
+}
+async fn feed(
+    State(state): State<AppState>,
+    Path(kind): Path<String>,
+    Query(query): Query<FeedQuery>,
+) -> Result<Json<Vec<Video>>, ApiError> {
+    if kind != "continue" && ytdlp::feed_target(&kind).is_none() {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "unknown feed"));
+    }
+    let account = {
+        let _transition = state.transition.lock().await;
+        state.profiles.active().await.map_err(internal)?
+    };
+    state
+        .feeds
+        .feed(&account, &kind, query.refresh)
+        .await
+        .map(Json)
+        .map_err(|err| {
+            tracing::warn!(profile_id=%account.profile.id,kind,"feed failed: {err:#}");
+            ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "could not load this feed; check your connection or sign in again",
+            )
+        })
+}
+async fn queue(State(state): State<AppState>) -> Result<Json<Vec<Video>>, ApiError> {
+    let _transition = state.transition.lock().await;
+    let account = state.profiles.active().await.map_err(internal)?;
+    state
+        .profiles
+        .db
+        .queue(&account.profile.id)
+        .await
+        .map(Json)
+        .map_err(internal)
+}
+#[derive(Deserialize)]
+struct QueueItem {
+    id: String,
+}
+async fn enqueue(
+    State(state): State<AppState>,
+    body: Result<Json<QueueItem>, JsonRejection>,
+) -> Result<Json<Vec<Video>>, ApiError> {
+    let Json(item) =
+        body.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "expected {id} JSON"))?;
+    if !ytdlp::is_video_id(&item.id) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid video id"));
+    }
+    let _transition = state.transition.lock().await;
+    let account = state.profiles.active().await.map_err(internal)?;
+    state
+        .profiles
+        .db
+        .enqueue(&account.profile.id, &item.id)
+        .await
+        .map_err(internal)?;
+    state
+        .profiles
+        .db
+        .queue(&account.profile.id)
+        .await
+        .map(Json)
+        .map_err(internal)
+}
+async fn clear_queue(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let _transition = state.transition.lock().await;
+    let account = state.profiles.active().await.map_err(internal)?;
+    state
+        .profiles
+        .db
+        .dequeue(&account.profile.id, None)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({"status":"cleared"})))
+}
+async fn remove_queue(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !ytdlp::is_video_id(&id) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid video id"));
+    }
+    let _transition = state.transition.lock().await;
+    let account = state.profiles.active().await.map_err(internal)?;
+    state
+        .profiles
+        .db
+        .dequeue(&account.profile.id, Some(&id))
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({"status":"removed"})))
+}
+async fn next(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let _transition = state.transition.lock().await;
+    let account = state.profiles.active().await.map_err(internal)?;
+    if state
+        .profiles
+        .login_status(&account.profile.id)
+        .await
+        .busy()
+    {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "close the sign-in window and wait for the login check first",
+        ));
+    }
+    let playing = state.playback.next(account).await.map_err(internal)?;
+    Ok(Json(json!({"playing":playing})))
 }

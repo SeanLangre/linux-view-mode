@@ -13,7 +13,7 @@ use tokio::process::Command;
 const TIMEOUT: Duration = Duration::from_secs(30);
 pub const MAX_QUERY_LEN: usize = 200;
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Video {
     pub id: String,
     pub title: String,
@@ -23,9 +23,11 @@ pub struct Video {
     pub duration: Option<f64>,
     pub view_count: Option<u64>,
     pub thumb: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_position: Option<f64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Channel {
     pub id: String,
     pub name: Option<String>,
@@ -49,6 +51,56 @@ pub async fn channel(id: &str, limit: u32, firefox: Option<&Path>) -> Result<Cha
         name: playlist.channel,
         videos: playlist.videos,
     })
+}
+
+impl Video {
+    pub fn placeholder(id: &str) -> Self {
+        Self {
+            id: id.into(),
+            title: format!("Video {id}"),
+            channel: None,
+            channel_id: None,
+            duration: None,
+            view_count: None,
+            thumb: format!("https://i.ytimg.com/vi/{id}/hqdefault.jpg"),
+            resume_position: None,
+        }
+    }
+}
+
+pub fn feed_target(kind: &str) -> Option<&'static str> {
+    match kind {
+        "recommended" => Some("https://www.youtube.com/feed/recommended"),
+        "subscriptions" => Some("https://www.youtube.com/feed/subscriptions"),
+        "history" => Some("https://www.youtube.com/feed/history"),
+        "watchlater" => Some("https://www.youtube.com/playlist?list=WL"),
+        "liked" => Some("https://www.youtube.com/playlist?list=LL"),
+        _ => None,
+    }
+}
+
+pub async fn feed(kind: &str, firefox: &Path) -> Result<Vec<Video>> {
+    let target = feed_target(kind).context("unknown feed")?;
+    let json = run(target, &["--playlist-end", "24"], Some(firefox)).await?;
+    Ok(parse_playlist(&json)?.videos)
+}
+
+pub async fn mark_watched(id: &str, firefox: &Path) -> Result<()> {
+    if !is_video_id(id) {
+        bail!("invalid video id");
+    }
+    run(
+        &format!("https://www.youtube.com/watch?v={id}"),
+        &[
+            "--no-flat-playlist",
+            "--no-playlist",
+            "--simulate",
+            "--mark-watched",
+        ],
+        Some(firefox),
+    )
+    .await?;
+    Ok(())
 }
 
 pub fn is_video_id(id: &str) -> bool {
@@ -172,6 +224,7 @@ fn parse_playlist(json: &[u8]) -> Result<Playlist> {
                 view_count: e.view_count,
                 thumb,
                 id,
+                resume_position: None,
             })
         })
         .collect();

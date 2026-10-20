@@ -1,5 +1,7 @@
 mod api;
 mod db;
+mod feeds;
+mod playback;
 mod player;
 mod profiles;
 mod ytdlp;
@@ -39,7 +41,6 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| "config/mpv".into());
     let player = player::Player::new(player_config)?;
-    let monitor = player.monitor();
     let data_dir = match std::env::var_os("COUCHTUBE_DATA_DIR") {
         Some(path) => PathBuf::from(path),
         None => std::env::var_os("XDG_DATA_HOME")
@@ -51,11 +52,24 @@ async fn main() -> Result<()> {
             .join("couchtube"),
     };
     let profiles = profiles::Profiles::open(data_dir)?;
+    let playback = playback::Playback::new(player.clone(), profiles.db.clone());
     let state = api::AppState {
-        player: player.clone(),
+        playback: playback.clone(),
+        feeds: feeds::Feeds(profiles.db.clone()),
         profiles,
         transition: Default::default(),
     };
+    let tracked = state.clone();
+    let monitor = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+        loop {
+            interval.tick().await;
+            let _transition = tracked.transition.lock().await;
+            if let Err(err) = tracked.playback.tick().await {
+                tracing::error!("playback tracking failed: {err:#}");
+            }
+        }
+    });
     let app = Router::new()
         .nest("/api", api::router(state))
         .fallback_service(frontend)
@@ -81,7 +95,7 @@ async fn main() -> Result<()> {
         })
         .await;
     monitor.abort();
-    player.stop().await?;
+    playback.stop().await?;
     result?;
     Ok(())
 }

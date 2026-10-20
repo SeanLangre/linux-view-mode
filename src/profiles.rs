@@ -248,6 +248,9 @@ impl Profiles {
                 }
             }
         };
+        if let Err(err) = self.db.invalidate(&account.profile.id).await {
+            tracing::error!("could not invalidate account cache: {err:#}");
+        }
         self.set_status(&account.profile.id, status).await;
     }
 

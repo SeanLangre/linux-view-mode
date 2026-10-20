@@ -139,7 +139,7 @@ else:
                 assert cookie_arg(bob) in logged("yt-dlp")[-1]["args"]
                 assert request("profiles/guest/select", {})[0] == 200
                 request("search?q=guest")
-                assert "--cookies-from-browser" not in logged("yt-dlp")[-1]["args"]
+                assert "--cookies-from-browser" not in [call for call in logged("yt-dlp") if call["args"][-1] == "ytsearch24:guest"][-1]["args"]
                 request("play", {"id": "aqz-KE-bpKQ"})
                 wait_for(lambda: len(logged("mpv")) == 2)
                 assert not any("cookies-from-browser" in argument for argument in logged("mpv")[-1]["args"])

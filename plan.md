@@ -11,9 +11,10 @@ The original chat transcript this plan came from is kept in `plan.chat.md`. How 
 | 0 — Server checks | Not started (needs the Arch install) |
 | 1 — Backend skeleton | ✅ Done |
 | 2 — TV interface | ✅ Done (still to try in `firefox --kiosk`) |
-| 3 — Playback | Implemented; Firefox/KDE Wayland check pending |
-| 4 — Profiles and sign-in | Implemented; real-account check pending |
-| 5–7 | Not started |
+| 3 — Playback | Implemented; user test positive, explicit focus check pending |
+| 4 — Profiles and sign-in | Implemented; user test positive, explicit two-account check pending |
+| 5 — Account feeds | Implemented; real-account verification pending |
+| 6–7 | Not started |
 
 ---
 
@@ -87,11 +88,11 @@ YouTube refreshes some login cookies over time, and a session that's never refre
 ### Feeds (yt-dlp, with the active profile's login)
 | Row / screen | Source |
 |---|---|
-| Home: Recommended | `:ytrec` |
-| Subscriptions | `:ytsubs` |
-| History | `:ythistory` |
-| Watch Later | `:ytwatchlater` |
-| Liked | `:ytfav` |
+| Home: Recommended | `https://www.youtube.com/feed/recommended` |
+| Subscriptions | `https://www.youtube.com/feed/subscriptions` |
+| History | `https://www.youtube.com/feed/history` |
+| Watch Later | `https://www.youtube.com/playlist?list=WL` |
+| Liked | `https://www.youtube.com/playlist?list=LL` |
 | Search | `ytsearch24:<query>` (personalized when signed in) |
 | Channel | `https://www.youtube.com/channel/<id>/videos` |
 
@@ -127,9 +128,11 @@ src/
   main.rs                  ✅ config, router, static files
   api.rs                   ✅ HTTP handlers
   ytdlp.rs                 ✅ running yt-dlp: search, channel (later: feeds, mark-watched)
-  profiles.rs              ✅ profiles, Firefox profile setup, sign-in, login check, refresh
-  player.rs                ✅ mpv process + IPC (one player at a time)
-  db.rs                    ✅ SQLite profiles and active selection (progress/queue in Phase 5)
+  profiles.rs              ✅ profiles, Firefox profile setup, sign-in, login check (refresh timer in Phase 6)
+  player.rs                ✅ mpv process + persistent IPC (one player at a time)
+  playback.rs              ✅ progress, watched sync, queue advancement
+  feeds.rs                 ✅ account feeds, persistent cache and prefetch
+  db.rs                    ✅ SQLite profiles, progress, metadata, queue and per-profile cache
 frontend/                  ✅ Vite + React + TS
   src/App.tsx              ✅ screens, back stack, keyboard handling
   src/nav.ts               ✅ 2D focus logic (unit-tested in nav.test.ts)
@@ -147,7 +150,7 @@ deploy/
 
 ### Crates
 In use: `axum` 0.8, `tokio` (full), `tower-http` (fs, trace), `serde`, `serde_json`, `anyhow`, `tracing`, `tracing-subscriber` (env-filter).
-Profile storage uses `rusqlite` (bundled SQLite). Progress, queue and feed storage come in Phase 5.
+Profile storage uses `rusqlite` (bundled SQLite). Progress, queue and feed storage are implemented.
 
 ### Frontend
 React 19 + TypeScript + Vite 8, tested with vitest, linted with oxlint. No UI library: the app is one screen stack and a row/column focus model.
@@ -162,20 +165,22 @@ React 19 + TypeScript + Vite 8, tested with vitest, linted with oxlint. No UI li
 | POST | `/api/profiles/:id/select` ✅ | Set the active profile |
 | POST | `/api/profiles/:id/signin` ✅ | Open the sign-in window |
 | GET | `/api/profiles/:id/status` ✅ | Login state/message; `?check=true` starts a check |
-| GET | `/api/feed/:kind` | `recommended`, `subscriptions`, `history`, `watchlater`, `liked` |
+| GET | `/api/feed/:kind` ✅ | `continue`, `recommended`, `subscriptions`, `history`, `watchlater`, `liked` |
 | GET | `/api/search?q=&limit=` ✅ | Search (default 24, max 50 results) |
 | GET | `/api/channel/:id` ✅ | Channel name + latest 24 uploads |
 | POST | `/api/play` `{id, start?}` / `/api/stop` ✅ | Start or stop mpv |
 | GET | `/api/status` ✅ | Process running, video ID, title, position, duration, pause and error |
-| GET/POST/DELETE | `/api/queue` | Queue for the active profile |
+| GET/POST/DELETE | `/api/queue` ✅ | Queue for the active profile; DELETE `/api/queue/:id` removes one |
+| POST | `/api/next` ✅ | Stop and play the next queued item |
 | POST | `/api/fallback/youtube-tv` | Open youtube.com/tv in the active profile's Firefox |
 | POST | `/api/system/exit` | Close kiosk and go back to the desktop |
 
 ### Data (SQLite, `~/.local/share/couchtube/couchtube.db`)
-- `profiles(id, name, color, created_at)`
-- `progress(profile_id, video_id, position, duration, updated_at)` drives "Continue watching"
-- `queue(profile_id, pos, video_id)`
-- `videos(id, title, channel_id, channel_name, duration, thumb)` caches metadata
+- `profiles(id, name, color, created_at)` and `settings(key, value)` store profiles and active selection
+- `progress(profile_id, video_id, position, duration, watched, marked, completed, updated_at)` drives Continue watching and watched sync
+- `queue(position, profile_id, video_id)`
+- `videos(profile_id, video_id, json)` caches metadata per profile
+- `feed_cache(profile_id, cache_key, json, expires_at)` stores feed/search/channel responses
 
 ### Security rules
 - Backend binds to **127.0.0.1 only** (it starts processes and holds account access).
@@ -261,11 +266,11 @@ Tested by driving the built app in headless Chromium at 1920×1080 with real key
 - Screens: Home, Search, Results, Channel.
 - 2D grid navigation: a visible focus ring, the focused card scrolled into view, and a remembered focus position per screen.
 - 10-foot styling: dark theme, large text (≥ 24 px at 1080p), 16:9 thumbnails, nothing important near the screen edges, light on the RN96's GPU.
-- Home shows placeholder rows (Music, Nature, Science & tech) plus recent searches until Phase 5 brings the account feeds. Enter on a video shows a "Playback arrives in Phase 3" message.
-- Known quirk: after the first search, going back to Home can land on the new "Recent searches" row instead of the video row you left, because that row is inserted above it.
+- Phase 2 initially used Music/Nature/Science placeholder rows. Phase 5 replaced them with account feeds. Enter launches mpv (added in Phase 3).
+- The first-search Home focus quirk was fixed in Phase 5: recent searches follow the stable video rows, with a browser regression test.
 - **Done when:** you can search and browse with the keyboard only, in `firefox --kiosk`.
 
-### Phase 3 — Playback — implemented, desktop check pending
+### Phase 3 — Playback — implemented, user test positive
 Backend tests cover process replacement, stop, failed exits and IPC replies; frontend tests cover playback requests and uncached status. A headless smoke test with real mpv and local audio passed (API validation, title/position/pause, replacement, quit, stop and backend shutdown). SponsorBlock has a Lua test for skipping and failure handling. The Firefox kiosk/KDE stacking and focus check remains manual.
 - `player.rs`: mpv with `--fullscreen --hwdec=vaapi --ytdl-format=… --input-ipc-server=$XDG_RUNTIME_DIR/couchtube-<session>/ipc --config-dir=…`, one player at a time, reads `time-pos` and `duration` over IPC.
 - SponsorBlock mpv script (paid sponsor segments; `curl`, asynchronous, leaves playback running on failure).
@@ -274,18 +279,24 @@ Backend tests cover process replacement, stop, failed exits and IPC replies; fro
 - Browser test: Firefox kiosk + mpv on top on KDE Wayland can be checked on the dev machine already (same desktop as the server).
 - **Done when:** Enter plays, Esc returns to the same card.
 
-### Phase 4 — Profiles and sign-in — implemented, real-account check pending
+### Phase 4 — Profiles and sign-in — implemented, user test positive
 - SQLite stores profile names/colours and active selection; profile folders are private (`0700`) and the database is `0600`.
 - The extension policy is supplied in `config/firefox/policies.json`; deployment to system Firefox policies remains manual until Phase 6.
 - Search and channel requests use the selected profile’s cookies and run one at a time per profile. mpv receives the same cookie source. Guest ignores desktop yt-dlp config and never loads account cookies.
 - The picker opens at startup; `p` opens it while browsing. Browser caches and recent searches are separated by profile.
 - Sign-in status tracks Firefox opening/closing and a single-item `:ytsubs` check, with a manual retry.
-- Verified with simulated account tools: isolation of cookies, Guest, login/check failures, deletion and restart persistence. Headless Chromium exercised Guest → add/sign-in → playback/return → remove → switch using keyboard events. Real mpv IPC confirmed cookie paths with spaces/commas are passed correctly. Real Google account verification still needs the user’s login.
+- Verified with simulated account tools: isolation of cookies, Guest, login/check failures, deletion and restart persistence. Headless Chromium exercised Guest → add/sign-in → playback/return → remove → switch using keyboard events. Real mpv IPC confirmed cookie paths with spaces/commas are passed correctly. The user subsequently reported the real profile/sign-in flow worked well (2026-10-20). The exact two-account switching check remains to be confirmed.
 - "Who's watching?" screen, add/remove profile, Firefox profile setup (`user.js`, uBlock Origin, SponsorBlock), sign-in window, login check, Guest profile.
 - yt-dlp and mpv use the active profile's login.
 - **Done when:** two accounts can be signed in and switched with `p`.
 
-### Phase 5 — Account feeds
+### Phase 5 — Account feeds — implemented, real-account verification pending
+- SQLite adds per-profile video metadata, progress, queue and expiring response caches without replacing existing profiles.
+- Guest has local history/resume/queue; account feeds require a cookie database. Feed sources use canonical YouTube URLs, including History, WL and LL.
+- The backend observes mpv properties and end-file events over one persistent IPC connection. It saves progress every ~5 s and on stop, advances the queue at EOF, and treats mpv `n` (`quit 5`) as an explicit next request. Esc/q leaves the remaining queue intact.
+- Watched sync runs once after ~30–35 s of accumulated actual viewing, using `--simulate --mark-watched --no-flat-playlist`. Pausing and seeking do not add skipped time; failures can retry in a later session. Guest never sends watched updates.
+- Server caches retain responses for 10 min for account feeds/channels, 2 min for history and 30 min for search; selecting an account prefetches Recommended/Subscriptions. `u` refreshes the current feed.
+- Automated checks cover cache/profile isolation, resume, stop versus EOF/next, watched-sync arguments, persistence, and keyboard feed/queue navigation. Personal feed contents and YouTube history sync still need a real-account test.
 - Home rows: Continue watching (local), Recommended, Subscriptions. Separate screens for History, Watch Later and Liked.
 - Mark videos watched after ~30 s. Resume positions and queue per profile.
 - Per-profile cache; prefetch when a profile is picked.
@@ -310,7 +321,9 @@ Backend tests cover process replacement, stop, failed exits and IPC replies; fro
 
 ## 8. Open questions
 
-None right now. Phase 0 results may raise new ones.
+- The user reported playback and sign-in worked well on the dev machine (2026-10-20). A supplied log confirms AV1 at 1920×1080, 59.94 fps with VA-API and PipeWire.
+- That log also contains `client removed during hook handling`, `Packet corrupt`, `Invalid OBU length` and `Failed to parse temporal unit`, followed by `Exiting... (Quit)` at about 20 seconds. The warnings have no confirmed cause; whether playback failed visibly or the user quit is still unknown. Retain AV1 support while gathering a reproduction.
+- Explicit Firefox kiosk stacking/focus-return and two-account switching checks remain to be recorded. Server-specific Phase 0 checks are separate.
 
 ### Decided
 - Server GPU: **Intel Iris Xe** (Tiger Lake), so AV1 is allowed.

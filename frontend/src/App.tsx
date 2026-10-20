@@ -9,6 +9,8 @@ type Screen =
   | { kind: 'home' }
   | { kind: 'search'; query: string }
   | { kind: 'channel'; id: string; name: string | null }
+  | { kind: 'feed'; feed: api.FeedKind }
+  | { kind: 'queue' }
 
 /** One level of the back stack. Focus is kept per level so Back returns to the same card. */
 type Entry = { screen: Screen; focus: Focus }
@@ -17,14 +19,17 @@ type Row =
   | { kind: 'search-button' }
   | { kind: 'search-input' }
   | { kind: 'chips'; title: string; items: string[] }
-  | { kind: 'videos'; title?: string; videos: Video[]; carousel: boolean }
+  | { kind: 'menu'; items: { label: string; action: string }[] }
+  | { kind: 'videos'; title?: string; videos: Video[]; carousel: boolean; error?: string }
 
-// Placeholder rows until the account feeds (Phase 5) replace them.
-const HOME_ROWS = [
-  { title: 'Music', query: 'music mix' },
-  { title: 'Nature', query: 'nature documentary 4k' },
-  { title: 'Science & tech', query: 'science explained' },
+const HOME_MENU = [
+  { label: 'History', action: 'history' }, { label: 'Watch later', action: 'watchlater' },
+  { label: 'Liked', action: 'liked' }, { label: 'Queue', action: 'queue' },
 ]
+const FEED_NAMES: Record<api.FeedKind, string> = {
+  continue: 'Continue watching', recommended: 'Recommended', subscriptions: 'Subscriptions',
+  history: 'History', watchlater: 'Watch later', liked: 'Liked videos',
+}
 
 const GRID_COLUMNS = 4
 
@@ -39,6 +44,11 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
   const [stack, setStack] = useState<Entry[]>([{ screen: { kind: 'home' }, focus: START }])
   const [recent, setRecent] = useState(() => loadRecent(profile.id))
   const [draft, setDraft] = useState('')
+  const [dataRevision, setDataRevision] = useState(0)
+  const refreshRequested = useRef(false)
+  const [feedback, setFeedback] = useState<string | null>(null)
+  const feedbackTimer = useRef<number | undefined>(undefined)
+  const wasPlaying = useRef(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const [playback, setPlayback] = useState<api.PlayerStatus | null>(null)
   const [playbackError, setPlaybackError] = useState<string | null>(null)
@@ -55,6 +65,8 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
       try {
         const status = await api.playerStatus()
         if (!cancelled && revision === playbackRevision.current && !startingRef.current) {
+          if (wasPlaying.current && !status.playing) setDataRevision((value) => value + 1)
+          wasPlaying.current = status.playing
           setPlayback(status)
           setPlaybackError(status.error)
         }
@@ -67,7 +79,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
     return () => { cancelled = true; window.clearTimeout(timer) }
   }, [])
 
-  async function startVideo(video: Video) {
+  async function startVideo(video: Video, start?: number) {
     if (startingRef.current) return
     startingRef.current = true
     playbackRevision.current++
@@ -75,7 +87,8 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
     setPlaybackError(null)
     selectedTitle.current = { id: video.id, title: video.title }
     try {
-      await api.play(video.id)
+      await api.play(video.id, start)
+      wasPlaying.current = true
       setPlayback({ playing: true, id: video.id, title: video.title,
         position: null, duration: null, paused: false, error: null })
     } catch (err) {
@@ -91,26 +104,32 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
     try {
       await api.stop()
       setPlayback(null)
+      wasPlaying.current = false
+      setDataRevision((value) => value + 1)
       setPlaybackError(null)
     } catch (err) { setPlaybackError((err as Error).message) }
   }
 
   const { screen } = stack[stack.length - 1]
   const key = screenKey(screen)
-  const data = useScreenRows(screen)
+  const data = useScreenRows(screen, dataRevision, refreshRequested)
 
   const rows = useMemo<Row[]>(() => {
     switch (screen.kind) {
       case 'home':
         return [
           { kind: 'search-button' },
+          { kind: 'menu', items: HOME_MENU },
+          ...data.rows,
           ...(recent.length > 0
             ? [{ kind: 'chips', title: 'Recent searches', items: recent } as const]
             : []),
-          ...data.rows,
         ]
       case 'search':
         return [{ kind: 'search-input' }, ...data.rows]
+      case 'queue':
+        return [{ kind: 'menu', items: [{ label: 'Play next', action: 'next' }, { label: 'Clear queue', action: 'clear' }] }, ...data.rows]
+      case 'feed':
       case 'channel':
         return data.rows
     }
@@ -118,7 +137,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
 
   const specs: RowSpec[] = rows.map((row) => ({
     length: rowLength(row),
-    remember: row.kind === 'chips' || (row.kind === 'videos' && row.carousel),
+    remember: row.kind === 'menu' || row.kind === 'chips' || (row.kind === 'videos' && row.carousel),
   }))
   const focus = clamp(stack[stack.length - 1].focus, specs)
   const focusedRow = rows.length > 0 ? rows[focus.row] : undefined
@@ -169,11 +188,41 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
     push({ kind: 'channel', id: video.channel_id, name: video.channel })
   }
 
+  function notify(message: string) {
+    setFeedback(message)
+    window.clearTimeout(feedbackTimer.current)
+    feedbackTimer.current = window.setTimeout(() => setFeedback(null), 2500)
+  }
+
+  async function queueAction(action: 'add' | 'remove' | 'next' | 'clear') {
+    try {
+      if (action === 'add') {
+        const video = focusedVideo()
+        if (!video) return
+        await api.enqueue(video.id)
+        notify(`Queued: ${video.title}`)
+      } else if (action === 'remove') {
+        const video = focusedVideo()
+        if (!video) return
+        await api.deleteQueue(video.id)
+      } else if (action === 'clear') await api.deleteQueue()
+      else { const result = await api.next(); if (!result.playing) notify('Queue is empty') }
+      setDataRevision((value) => value + 1)
+    } catch (err) { notify((err as Error).message) }
+  }
+
   function activate() {
     switch (focusedRow?.kind) {
       case 'search-button':
         openSearch()
         break
+      case 'menu': {
+        const action = focusedRow.items[focus.col]?.action
+        if (action === 'queue') push({ kind: 'queue' })
+        else if (action === 'next' || action === 'clear') void queueAction(action)
+        else if (action) push({ kind: 'feed', feed: action as api.FeedKind })
+        break
+      }
       case 'chips':
         runSearch(focusedRow.items[focus.col])
         break
@@ -188,7 +237,8 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
     function onKeyDown(e: KeyboardEvent) {
       // Keep the browsing position until mpv exits, including when Firefox retains focus.
       if (starting || playback?.playing) {
-        if (e.key === 'Escape' || e.key === 'Backspace') {
+        if (e.key === 'n' && !starting) { e.preventDefault(); void queueAction('next') }
+        else if (e.key === 'Escape' || e.key === 'Backspace') {
           e.preventDefault()
           if (!starting) void stopVideo()
         } else if (ARROWS[e.key] || ['Enter', '/', 'Home', 'c'].includes(e.key)) {
@@ -231,6 +281,20 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
         case 'Home':
           e.preventDefault()
           goHome()
+          break
+        case 'a':
+          void queueAction('add')
+          break
+        case 'd':
+          if (screen.kind === 'queue') void queueAction('remove')
+          break
+        case 'n':
+          void queueAction('next')
+          break
+        case 'r': { const video = focusedVideo(); if (video) void startVideo(video, 0); break }
+        case 'u':
+          refreshRequested.current = true
+          setDataRevision((value) => value + 1)
           break
         case 'p':
           onSwitch()
@@ -275,6 +339,8 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
       </header>
 
       {screen.kind === 'home' && <h1 className="page-title">What do you want to watch?</h1>}
+      {screen.kind === 'feed' && <h1 className="page-title">{FEED_NAMES[screen.feed]}</h1>}
+      {screen.kind === 'queue' && <h1 className="page-title">Up next</h1>}
       {screen.kind === 'channel' && <h1 className="page-title">{screen.name ?? 'Channel'}</h1>}
 
       {rows.map((row, r) => (
@@ -290,6 +356,11 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
       ))}
 
       {data.loading && <SkeletonRow />}
+      {!data.loading && !data.error && !data.rows.some((row) => row.kind === 'videos' && row.videos.length > 0) && (
+        <p className="status">{screen.kind === 'home' ? 'Search for a video, or sign in to load your recommendations and subscriptions.'
+          : screen.kind === 'queue' ? 'Your queue is empty. Press A on a video to add it.'
+          : screen.kind === 'feed' ? 'No videos here. Account feeds need a signed-in profile; press U to refresh.' : ''}</p>
+      )}
       {data.error && (
         <p className="status error">
           {data.error} · <kbd>Esc</kbd> to go back
@@ -306,7 +377,11 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
       <footer className="hints">
         <span><kbd>← ↑ ↓ →</kbd>Move</span>
         <span><kbd>Enter</kbd>{videoRowFocused ? 'Play' : 'Select'}</span>
+        {videoRowFocused && <span><kbd>A</kbd>Queue</span>}
         {videoRowFocused && <span><kbd>C</kbd>Channel</span>}
+        {screen.kind === 'queue' && <span><kbd>D</kbd>Remove</span>}
+        <span><kbd>N</kbd>Next</span>
+        <span><kbd>U</kbd>Refresh</span>
         <span><kbd>/</kbd>Search</span>
         <span><kbd>P</kbd>Profiles</span>
         {stack.length > 1 && <span><kbd>Esc</kbd>Back</span>}
@@ -321,6 +396,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
           {' · Esc to stop'}
         </div>
       )}
+      {feedback && <div className="toast" role="status">{feedback}</div>}
       {playbackError && <div className="toast error" role="alert">{playbackError}</div>}
     </main>
   )
@@ -368,6 +444,8 @@ function RowView({
           />
         </form>
       )
+    case 'menu':
+      return <div className="chips" aria-label="Browse">{row.items.map((item, i) => <span key={item.action} className={`chip ${i === focusedCol ? 'focused' : ''}`}>{item.label}</span>)}</div>
     case 'chips':
       return (
         <section>
@@ -382,6 +460,7 @@ function RowView({
         </section>
       )
     case 'videos':
+      if (row.videos.length === 0) return row.error ? <p className="status error">{row.title}: {row.error}</p> : null
       return (
         <section>
           {row.title && <h2 className="row-title">{row.title}</h2>}
@@ -400,6 +479,7 @@ function VideoCard({ video, focused }: { video: Video; focused: boolean }) {
   return (
     <div className={`card ${focused ? 'focused' : ''}`}>
       <div className="thumb">
+        {video.resume_position !== undefined && <span className="resume-badge">Resume {formatDuration(video.resume_position)}</span>}
         <img src={video.thumb} alt="" loading="lazy" />
         <span className={`badge ${video.duration === null ? 'live' : ''}`}>
           {formatDuration(video.duration)}
@@ -425,7 +505,7 @@ function SkeletonRow() {
 }
 
 /** Loads the video rows for a screen. Results are cached in `api`, so going back is instant. */
-function useScreenRows(screen: Screen) {
+function useScreenRows(screen: Screen, revision: number, refreshRequested: RefObject<boolean>) {
   const key = screenKey(screen)
   const [state, setState] = useState<{ key: string; rows: Row[]; error: string | null }>()
 
@@ -434,7 +514,9 @@ function useScreenRows(screen: Screen) {
     const done = (rows: Row[], error: string | null = null) => {
       if (!cancelled) setState({ key, rows, error })
     }
-    const pending = loadRows(screen)
+    const refresh = refreshRequested.current
+    refreshRequested.current = false
+    const pending = loadRows(screen, refresh)
     if (pending) pending.then((rows) => done(rows), (err: Error) => done([], err.message))
     else done([])
     return () => {
@@ -442,7 +524,7 @@ function useScreenRows(screen: Screen) {
     }
     // `key` identifies the screen; the object itself changes identity on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key])
+  }, [key, revision])
 
   const current = state?.key === key ? state : undefined
   return {
@@ -452,22 +534,20 @@ function useScreenRows(screen: Screen) {
   }
 }
 
-function loadRows(screen: Screen): Promise<Row[]> | null {
+function loadRows(screen: Screen, refresh: boolean): Promise<Row[]> | null {
   switch (screen.kind) {
-    case 'home':
-      return Promise.allSettled(HOME_ROWS.map((r) => api.search(r.query))).then((results) => {
-        const rows: Row[] = []
-        results.forEach((result, i) => {
-          if (result.status === 'fulfilled' && result.value.length > 0) {
-            rows.push({ kind: 'videos', title: HOME_ROWS[i].title, videos: result.value, carousel: true })
-          }
-        })
-        if (rows.length === 0) {
-          const failure = results.find((r) => r.status === 'rejected')
-          if (failure) throw failure.reason
-        }
-        return rows
-      })
+    case 'home': {
+      const kinds = ['continue', 'recommended', 'subscriptions'] as const
+      return Promise.allSettled(kinds.map((kind) => api.feed(kind, refresh))).then((results) =>
+        results.map((result, index): Row => ({ kind: 'videos', title: FEED_NAMES[kinds[index]], carousel: true,
+          videos: result.status === 'fulfilled' ? result.value : [],
+          error: result.status === 'rejected' ? (result.reason as Error).message : undefined,
+        })))
+    }
+    case 'feed':
+      return api.feed(screen.feed, refresh).then((videos) => gridRows(videos))
+    case 'queue':
+      return api.queue().then((videos) => gridRows(videos))
     case 'search':
       if (!screen.query) return null
       return api.search(screen.query).then((videos) => gridRows(videos, `Results for “${screen.query}”`))
@@ -477,7 +557,7 @@ function loadRows(screen: Screen): Promise<Row[]> | null {
 }
 
 /** Splits videos into rows of GRID_COLUMNS, so ↑/↓ moves between visual rows. */
-function gridRows(videos: Video[], title: string): Row[] {
+function gridRows(videos: Video[], title?: string): Row[] {
   const rows: Row[] = []
   for (let i = 0; i < videos.length; i += GRID_COLUMNS) {
     rows.push({
@@ -495,6 +575,7 @@ function rowLength(row: Row): number {
     case 'search-button':
     case 'search-input':
       return 1
+    case 'menu':
     case 'chips':
       return row.items.length
     case 'videos':
@@ -508,6 +589,8 @@ function screenKey(screen: Screen): string {
       return 'home'
     case 'search':
       return `search:${screen.query}`
+    case 'queue': return 'queue'
+    case 'feed': return `feed:${screen.feed}`
     case 'channel':
       return `channel:${screen.id}`
   }
@@ -519,6 +602,8 @@ function crumb(screen: Screen): string {
       return 'Home'
     case 'search':
       return 'Search'
+    case 'queue': return 'Queue'
+    case 'feed': return FEED_NAMES[screen.feed]
     case 'channel':
       return 'Channel'
   }

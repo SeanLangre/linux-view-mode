@@ -59,7 +59,7 @@ try {
   async function key(value) {
     // Let React finish the screen transition and install its keyboard handlers.
     await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))).then(() => true)')
-    const code = { Enter: 13, Escape: 27, ArrowDown: 40, ArrowRight: 39, p: 80, d: 68 }[value]
+    const code = { Enter: 13, Escape: 27, ArrowDown: 40, ArrowRight: 39, ArrowUp: 38, ArrowLeft: 37, p: 80, d: 68 }[value]
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key: value, windowsVirtualKeyCode: code, text: value === 'Enter' ? String.fromCharCode(13) : undefined })
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: value, windowsVirtualKeyCode: code })
   }
@@ -86,7 +86,8 @@ try {
   await wait("document.activeElement?.textContent === 'Continue to CouchTube'")
   await key('Enter')
   await wait("document.querySelector('.profile-label')?.textContent === 'Keyboard test' && document.querySelector('.card .card-title')?.textContent === 'Fixture video'")
-  await key('ArrowDown')
+  await key('ArrowDown') // Home menu.
+  await key('ArrowDown') // Recommended (empty Continue row is skipped).
   await wait("document.querySelector('.card.focused .card-title')")
   const selected = await evaluate("document.querySelector('.card.focused .card-title')?.textContent")
   assert(selected)
@@ -95,6 +96,33 @@ try {
   await key('Escape')
   await wait("!document.querySelector('.toast')")
   assert.equal(await evaluate("document.querySelector('.card.focused .card-title')?.textContent"), selected)
+  await key('a')
+  await wait("document.querySelector('.toast')?.textContent.includes('Queued:')")
+  await key('ArrowUp') // Home menu, skipping the empty Continue row.
+  for (const label of ['History', 'Watch later', 'Liked videos']) {
+    await key('Enter')
+    await wait(`document.querySelector('.page-title')?.textContent === ${JSON.stringify(label)}`)
+    await wait("document.querySelector('.card .card-title')?.textContent === 'Fixture video'")
+    await key('Escape')
+    await wait("document.querySelector('.page-title')?.textContent === 'What do you want to watch?'")
+    await key('ArrowRight')
+  }
+  await key('Enter') // Queue.
+  await wait("document.querySelector('.page-title')?.textContent === 'Up next'")
+  await wait("document.querySelector('.card .card-title')?.textContent === 'Fixture video'")
+  await key('ArrowDown')
+  await key('d')
+  await wait("document.body.innerText.includes('Your queue is empty.')")
+  await key('Escape')
+  await key('ArrowDown') // Back to Recommended.
+  await wait("document.querySelector('.card.focused')")
+  await key('/')
+  await wait("document.activeElement?.tagName === 'INPUT'")
+  await send('Input.insertText', { text: 'focus regression' })
+  await key('Enter')
+  await wait("document.querySelector('.card.focused .card-title')?.textContent === 'Fixture video'")
+  await key('Escape')
+  await wait("document.querySelector('.card.focused')?.closest('section')?.querySelector('h2')?.textContent === 'Recommended'")
   await key('p')
   await wait("document.querySelector('.profile-grid')")
   await evaluate("[...document.querySelectorAll('.profile-card')].find(e => e.querySelector('strong')?.textContent === 'Keyboard test').focus()")
@@ -107,7 +135,7 @@ try {
   await key('Enter')
   await wait("document.querySelector('.profile-label')?.textContent === 'Bob'")
   assert.deepEqual(errors, [], 'browser raised a JavaScript exception')
-  console.log('Keyboard browser check passed: Guest, P, add/sign-in, continue, playback/return, removal, profile switch.')
+  console.log('Keyboard browser check passed: Guest, P, add/sign-in, continue, playback/return, feeds, queue, recent-search focus, removal, profile switch.')
 } finally {
   socket?.close()
   chromium.kill('SIGTERM')

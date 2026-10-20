@@ -9,6 +9,7 @@ export type Video = {
   duration: number | null
   view_count: number | null
   thumb: string
+  resume_position?: number
 }
 
 export type Channel = {
@@ -32,7 +33,7 @@ function get<T>(path: string): Promise<T> {
     if (!res.ok) throw new Error(body?.error ?? `request failed (${res.status})`)
     return body as T
   })
-  promise.catch(() => cache.delete(cacheKey))
+  promise.catch(() => { if (cache.get(cacheKey)?.promise === promise) cache.delete(cacheKey) })
   cache.set(cacheKey, { at: Date.now(), promise })
   return promise
 }
@@ -46,6 +47,7 @@ export const channel = (id: string) =>
 export type PlayerStatus = {
   playing: boolean
   id: string | null
+  session?: number | null
   title: string | null
   position: number | null
   duration: number | null
@@ -91,4 +93,21 @@ export async function removeProfile(id: string) {
 }
 
 let profileScope = 'guest'
-export function setProfileScope(id: string) { profileScope = id }
+export function setProfileScope(id: string) {
+  // Drop pending responses from the previous account as well as its browser cache.
+  // The backend retains its own per-profile cache for instant reuse after switching back.
+  cache.clear()
+  profileScope = id
+}
+
+export type FeedKind = 'continue' | 'recommended' | 'subscriptions' | 'history' | 'watchlater' | 'liked'
+export const feed = (kind: FeedKind, refresh = false) =>
+  playback<Video[]>(`feed/${kind}${refresh ? '?refresh=true' : ''}`)
+export const queue = () => playback<Video[]>('queue')
+export const enqueue = (id: string) => playback<Video[]>('queue', { id })
+export const next = () => playback<{ playing: boolean }>('next', {})
+export async function deleteQueue(id?: string) {
+  const res = await fetch(`/api/queue${id ? `/${encodeURIComponent(id)}` : ''}`, { method: 'DELETE' })
+  const body = await res.json().catch(() => null)
+  if (!res.ok) throw new Error(body?.error ?? `request failed (${res.status})`)
+}
