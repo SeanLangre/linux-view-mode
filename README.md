@@ -11,7 +11,7 @@ The full design and roadmap are in [`plan.md`](plan.md); the working checklist i
 
 | Works now | Coming next |
 |---|---|
-| Search, channel pages, keyboard navigation, back stack, recent searches, mpv playback and status | Google accounts (Phase 4), your own feeds (Phase 5), boot-to-TV setup (Phase 6) |
+| Search, channel pages, keyboard navigation, back stack, recent searches, mpv playback and status, profiles and Firefox sign-in | Your own feeds (Phase 5), boot-to-TV setup (Phase 6) |
 
 Press Enter on a video to launch fullscreen mpv. Esc or `q` in mpv stops playback; the interface keeps the same screen and selected card. Firefox kiosk stacking and focus return still need a manual KDE Wayland check.
 
@@ -36,6 +36,8 @@ cargo run
 firefox --kiosk http://127.0.0.1:7878
 ```
 
+CouchTube opens on **Who’s watching?** Choose Guest to browse signed out, or Add profile to connect an account.
+
 Firefox in kiosk mode has no window controls: close it with **Alt+F4**.
 
 ### Frontend development (live reload)
@@ -55,7 +57,21 @@ and open `http://127.0.0.1:5173`. Vite forwards `/api` calls to the backend.
 | `COUCHTUBE_PORT` | `7878` | Port to listen on (always `127.0.0.1` only) |
 | `COUCHTUBE_FRONTEND` | `frontend/dist` | Folder with the built frontend |
 | `COUCHTUBE_MPV_CONFIG` | `config/mpv` | mpv config directory, including scripts (relative to the backend working directory) |
+| `COUCHTUBE_DATA_DIR` | `$XDG_DATA_HOME/couchtube` or `~/.local/share/couchtube` | Private SQLite database and account Firefox profiles |
 | `RUST_LOG` | `couchtube=info` | Log level, e.g. `couchtube=debug,tower_http=debug` |
+
+## Profiles and sign-in
+
+1. On **Who’s watching?**, choose **Add profile**, enter a name and choose a colour, then press **Create and sign in**.
+2. Sign in to Google in the separate Firefox window. Complete any verification, then close that window with **Alt+F4**.
+3. Wait for **YouTube sign-in works**, then choose **Continue to CouchTube**. A failed check can mean a connection or yt-dlp problem; use **Check sign-in** or **Open sign-in again** to retry.
+4. Press **P** while browsing to switch profiles. On the picker, highlight a named profile and press **S** to reopen sign-in or **D** to remove it (with confirmation).
+
+Each account has its own Firefox folder; Guest never loads account cookies. A named profile with no cookie database browses signed out. Profiles and the active selection persist in SQLite, while the picker still appears on startup. Switching profiles stops mpv and opens Home for the selected person. Search results and recent searches are separated by profile. Removing a profile deletes its local sign-in files; deleting the active profile selects Guest.
+
+The sign-in check requests one item from the account’s subscriptions. Home still shows the Music/Nature/Science placeholder searches; personal feeds and history sync arrive in Phase 5. Daily cookie refresh is planned for deployment.
+
+`config/firefox/user.js` is copied into account profiles automatically. The supplied extension policy installs uBlock Origin and SponsorBlock when deployed to Firefox’s system policy directory. To enable it on this dev machine, first review the file and any existing `/etc/firefox/policies/policies.json`, then merge or install it there and restart Firefox. CouchTube does not change system Firefox policies automatically. See [Mozilla’s ExtensionSettings reference](https://firefox-admin-docs.mozilla.org/reference/policies/extensionsettings/).
 
 ## Keys
 
@@ -67,6 +83,7 @@ and open `http://127.0.0.1:5173`. Vite forwards `/api` calls to the backend.
 | `c` | Open the selected video's channel |
 | Esc / Backspace | Back |
 | Home | Go to the home screen |
+| `p` | Profile picker (while browsing) |
 
 In the search box, ↓ moves to the results and Esc goes back.
 
@@ -74,12 +91,18 @@ In the search box, ↓ moves to the results and Esc goes back.
 
 Space pauses; ←/→ seek 10 seconds; ↑/↓ seek 60 seconds; `9`/`0` adjust volume; `m` mutes; `i` shows title and progress; Esc/`q` quit. If Firefox retains focus, Esc stops playback through the API.
 
-`config/mpv/mpv.conf` caps video at 1080p and requests VA-API for the Intel TV server. On the NVIDIA dev machine, mpv may fall back to software decoding; adjust `hwdec` in that file for your hardware. The bundled SponsorBlock script uses `curl` to request paid sponsor segments and skips them automatically. A missing request or segment leaves playback running. Accounts, queue controls and watched-history sync come in later phases.
+`config/mpv/mpv.conf` caps video at 1080p and requests VA-API for the Intel TV server. On the NVIDIA dev machine, mpv may fall back to software decoding; adjust `hwdec` in that file for your hardware. The bundled SponsorBlock script uses `curl` to request paid sponsor segments and skips them automatically. A missing request or segment leaves playback running. Queue controls and watched-history sync come in later phases.
 
 ## API
 
 | Method | Path | Returns |
 |---|---|---|
+| GET | `/api/profiles` | `{profiles: [{id, name, color}], active_id}` |
+| POST | `/api/profiles` | Body `{name, color?}`; creates a local profile |
+| DELETE | `/api/profiles/<id>` | Removes the profile and its local sign-in files |
+| POST | `/api/profiles/<id>/select` | Selects a profile and stops playback |
+| POST | `/api/profiles/<id>/signin` | Opens that profile’s Firefox sign-in window |
+| GET | `/api/profiles/<id>/status` | `{state, message}`; `?check=true` starts a login check |
 | GET | `/api/health` | `{"status":"ok"}` |
 | GET | `/api/search?q=<text>&limit=<1-50>` | List of videos |
 | GET | `/api/channel/<UC… id>` | `{id, name, videos}` |
@@ -94,8 +117,8 @@ Playback positions are seconds; `start` must be finite and non-negative. Status 
 ## Tests and checks
 
 ```bash
-cargo test && cargo clippy          # backend, including player lifecycle and IPC
-cd frontend && npx vitest run       # navigation and playback API
+cargo test && cargo clippy          # backend, including profiles, player lifecycle and IPC
+cd frontend && npx vitest run       # navigation, API caching, recent searches
 npm run lint && npm run build       # lint + type-check
 ```
 
@@ -103,15 +126,18 @@ The optional playback smoke test uses real mpv with a generated local audio file
 
 ```bash
 cargo build && python3 tests/playback_smoke.py
+python3 tests/profiles_smoke.py     # simulated accounts; no real browser or Google sessions
+python3 tests/profiles_smoke.py --browser  # keyboard UI check; needs Chromium and Node 22+
 lua tests/sponsorblock_test.lua     # needs Lua; tests SponsorBlock without network access
 ```
 
 ## Project layout
 
 ```
-src/            Rust backend (main.rs, api.rs, ytdlp.rs, player.rs)
+src/            Rust backend (main.rs, api.rs, ytdlp.rs, player.rs, profiles.rs, db.rs)
 frontend/       React app (App.tsx, nav.ts, api.ts, styles.css)
 config/mpv/     Playback settings, keys, SponsorBlock script
+config/firefox/ Account preferences and extension policy
 plan.md         Design and roadmap
 TODO.md         Checklist
 plan.chat.md    The original chat this project came from

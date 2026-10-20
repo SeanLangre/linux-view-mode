@@ -3,8 +3,8 @@
 //! yt-dlp is always started directly (never through a shell), with `--` before
 //! the positional argument, and is killed if it runs longer than `TIMEOUT`.
 
-use std::process::Stdio;
 use std::time::Duration;
+use std::{path::Path, process::Stdio};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -32,17 +32,17 @@ pub struct Channel {
     pub videos: Vec<Video>,
 }
 
-/// Searches YouTube (signed out) and returns up to `limit` videos.
-pub async fn search(query: &str, limit: u32) -> Result<Vec<Video>> {
-    let json = run(&format!("ytsearch{limit}:{query}"), &[]).await?;
+/// Searches YouTube with the selected profile and returns up to `limit` videos.
+pub async fn search(query: &str, limit: u32, firefox: Option<&Path>) -> Result<Vec<Video>> {
+    let json = run(&format!("ytsearch{limit}:{query}"), &[], firefox).await?;
     Ok(parse_playlist(&json)?.videos)
 }
 
 /// A channel's latest `limit` uploads. `id` must pass `is_channel_id`.
-pub async fn channel(id: &str, limit: u32) -> Result<Channel> {
+pub async fn channel(id: &str, limit: u32, firefox: Option<&Path>) -> Result<Channel> {
     debug_assert!(is_channel_id(id));
     let url = format!("https://www.youtube.com/channel/{id}/videos");
-    let json = run(&url, &["--playlist-end", &limit.to_string()]).await?;
+    let json = run(&url, &["--playlist-end", &limit.to_string()], firefox).await?;
     let playlist = parse_playlist(&json)?;
     Ok(Channel {
         id: id.to_string(),
@@ -77,9 +77,15 @@ pub fn clean_query(raw: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-async fn run(target: &str, extra_args: &[&str]) -> Result<Vec<u8>> {
-    let child = Command::new("yt-dlp")
-        .args(["--flat-playlist", "-J", "--no-warnings"])
+async fn run(target: &str, extra_args: &[&str], firefox: Option<&Path>) -> Result<Vec<u8>> {
+    let mut command = Command::new("yt-dlp");
+    command.args(["--ignore-config", "--flat-playlist", "-J", "--no-warnings"]);
+    if let Some(folder) = firefox {
+        command
+            .arg("--cookies-from-browser")
+            .arg(format!("firefox:{}", folder.display()));
+    }
+    let child = command
         .args(extra_args)
         .arg("--")
         .arg(target)
@@ -95,10 +101,16 @@ async fn run(target: &str, extra_args: &[&str]) -> Result<Vec<u8>> {
         .context("yt-dlp timed out")??;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("yt-dlp failed: {}", stderr.trim());
+        // Avoid leaking account details from yt-dlp output into logs.
+        bail!("yt-dlp exited with {}", output.status);
     }
     Ok(output.stdout)
+}
+
+pub async fn check_login(firefox: &Path) -> Result<()> {
+    let json = run(":ytsubs", &["--playlist-end", "1"], Some(firefox)).await?;
+    parse_playlist(&json)?;
+    Ok(())
 }
 
 #[derive(Deserialize)]

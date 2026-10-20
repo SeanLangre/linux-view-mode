@@ -65,7 +65,12 @@ impl Player {
         }))))
     }
 
-    pub async fn play(&self, id: &str, start: Option<f64>) -> Result<()> {
+    pub async fn play(
+        &self,
+        id: &str,
+        start: Option<f64>,
+        firefox: Option<&std::path::Path>,
+    ) -> Result<()> {
         if !crate::ytdlp::is_video_id(id) || start.is_some_and(|v| !v.is_finite() || v < 0.0) {
             bail!("invalid video id or start position");
         }
@@ -91,6 +96,13 @@ impl Player {
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .kill_on_drop(true);
+        command.arg("--ytdl-raw-options=ignore-config=");
+        if let Some(folder) = firefox {
+            command.arg(format!(
+                "--ytdl-raw-options-append=cookies-from-browser=firefox:{}",
+                folder.display()
+            ));
+        }
         if let Some(start) = start {
             command.arg(format!("--start={start}"));
         }
@@ -254,14 +266,14 @@ mod tests {
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
         let player = Player::new("config/mpv".into()).unwrap();
         player.0.lock().await.executable = executable.clone();
-        player.play("aqz-KE-bpKQ", Some(12.0)).await.unwrap();
+        player.play("aqz-KE-bpKQ", Some(12.0), None).await.unwrap();
         let (first_pid, first_socket_dir) = {
             let inner = player.0.lock().await;
             let running = inner.running.as_ref().unwrap();
             (running.child.id().unwrap(), running.directory.clone())
         };
         assert!(player.status().await.unwrap().playing);
-        player.play("rFZHOHl-L8A", None).await.unwrap();
+        player.play("rFZHOHl-L8A", None, None).await.unwrap();
         assert!(!PathBuf::from(format!("/proc/{first_pid}")).exists());
         assert!(!first_socket_dir.exists());
         assert_eq!(
@@ -272,7 +284,7 @@ mod tests {
         player.stop().await.unwrap();
         assert!(!player.status().await.unwrap().playing);
         std::fs::write(&executable, "#!/bin/sh\nexit 1\n").unwrap();
-        player.play("aqz-KE-bpKQ", None).await.unwrap();
+        player.play("aqz-KE-bpKQ", None, None).await.unwrap();
         tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 let status = player.status().await.unwrap();
@@ -292,11 +304,11 @@ mod tests {
     #[tokio::test]
     async fn rejects_invalid_playback_before_spawning() {
         let player = Player::new("config/mpv".into()).unwrap();
-        assert!(player.play("--bad", None).await.is_err());
-        assert!(player.play("aqz-KE-bpKQ", Some(-1.0)).await.is_err());
+        assert!(player.play("--bad", None, None).await.is_err());
+        assert!(player.play("aqz-KE-bpKQ", Some(-1.0), None).await.is_err());
         assert!(
             player
-                .play("aqz-KE-bpKQ", Some(f64::INFINITY))
+                .play("aqz-KE-bpKQ", Some(f64::INFINITY), None)
                 .await
                 .is_err()
         );

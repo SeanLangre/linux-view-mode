@@ -12,7 +12,8 @@ The original chat transcript this plan came from is kept in `plan.chat.md`. How 
 | 1 — Backend skeleton | ✅ Done |
 | 2 — TV interface | ✅ Done (still to try in `firefox --kiosk`) |
 | 3 — Playback | Implemented; Firefox/KDE Wayland check pending |
-| 4–7 | Not started |
+| 4 — Profiles and sign-in | Implemented; real-account check pending |
+| 5–7 | Not started |
 
 ---
 
@@ -126,9 +127,9 @@ src/
   main.rs                  ✅ config, router, static files
   api.rs                   ✅ HTTP handlers
   ytdlp.rs                 ✅ running yt-dlp: search, channel (later: feeds, mark-watched)
-  profiles.rs              # profiles, Firefox profile setup, sign-in, login check, refresh
+  profiles.rs              ✅ profiles, Firefox profile setup, sign-in, login check, refresh
   player.rs                ✅ mpv process + IPC (one player at a time)
-  db.rs                    # SQLite schema + queries
+  db.rs                    ✅ SQLite profiles and active selection (progress/queue in Phase 5)
 frontend/                  ✅ Vite + React + TS
   src/App.tsx              ✅ screens, back stack, keyboard handling
   src/nav.ts               ✅ 2D focus logic (unit-tested in nav.test.ts)
@@ -136,7 +137,7 @@ frontend/                  ✅ Vite + React + TS
   src/styles.css           ✅ 10-foot styling (1rem = 1/80 of screen width)
 config/
   mpv/                     ✅ mpv.conf, input.conf, scripts/sponsorblock.lua
-  firefox/                 # policies.json (force-installs uBlock Origin + SponsorBlock), user.js
+  firefox/                 ✅ policies.json (force-installs uBlock Origin + SponsorBlock), user.js
 deploy/
   install.sh                         # build + install on the server
   couchtube.service                  # backend
@@ -146,7 +147,7 @@ deploy/
 
 ### Crates
 In use: `axum` 0.8, `tokio` (full), `tower-http` (fs, trace), `serde`, `serde_json`, `anyhow`, `tracing`, `tracing-subscriber` (env-filter).
-Still to add: `rusqlite` (bundled) in Phase 4/5.
+Profile storage uses `rusqlite` (bundled SQLite). Progress, queue and feed storage come in Phase 5.
 
 ### Frontend
 React 19 + TypeScript + Vite 8, tested with vitest, linted with oxlint. No UI library: the app is one screen stack and a row/column focus model.
@@ -156,10 +157,11 @@ React 19 + TypeScript + Vite 8, tested with vitest, linted with oxlint. No UI li
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/health` ✅ | `{"status":"ok"}` |
-| GET/POST/DELETE | `/api/profiles` | List / create / remove profiles |
-| POST | `/api/profiles/:id/select` | Set the active profile |
-| POST | `/api/profiles/:id/signin` | Open the sign-in window |
-| GET | `/api/profiles/:id/status` | Is the login valid? |
+| GET/POST | `/api/profiles` ✅ | List / create profiles |
+| DELETE | `/api/profiles/:id` ✅ | Remove a named profile and its local sign-in files |
+| POST | `/api/profiles/:id/select` ✅ | Set the active profile |
+| POST | `/api/profiles/:id/signin` ✅ | Open the sign-in window |
+| GET | `/api/profiles/:id/status` ✅ | Login state/message; `?check=true` starts a check |
 | GET | `/api/feed/:kind` | `recommended`, `subscriptions`, `history`, `watchlater`, `liked` |
 | GET | `/api/search?q=&limit=` ✅ | Search (default 24, max 50 results) |
 | GET | `/api/channel/:id` ✅ | Channel name + latest 24 uploads |
@@ -272,7 +274,13 @@ Backend tests cover process replacement, stop, failed exits and IPC replies; fro
 - Browser test: Firefox kiosk + mpv on top on KDE Wayland can be checked on the dev machine already (same desktop as the server).
 - **Done when:** Enter plays, Esc returns to the same card.
 
-### Phase 4 — Profiles and sign-in
+### Phase 4 — Profiles and sign-in — implemented, real-account check pending
+- SQLite stores profile names/colours and active selection; profile folders are private (`0700`) and the database is `0600`.
+- The extension policy is supplied in `config/firefox/policies.json`; deployment to system Firefox policies remains manual until Phase 6.
+- Search and channel requests use the selected profile’s cookies and run one at a time per profile. mpv receives the same cookie source. Guest ignores desktop yt-dlp config and never loads account cookies.
+- The picker opens at startup; `p` opens it while browsing. Browser caches and recent searches are separated by profile.
+- Sign-in status tracks Firefox opening/closing and a single-item `:ytsubs` check, with a manual retry.
+- Verified with simulated account tools: isolation of cookies, Guest, login/check failures, deletion and restart persistence. Headless Chromium exercised Guest → add/sign-in → playback/return → remove → switch using keyboard events. Real mpv IPC confirmed cookie paths with spaces/commas are passed correctly. Real Google account verification still needs the user’s login.
 - "Who's watching?" screen, add/remove profile, Firefox profile setup (`user.js`, uBlock Origin, SponsorBlock), sign-in window, login check, Guest profile.
 - yt-dlp and mpv use the active profile's login.
 - **Done when:** two accounts can be signed in and switched with `p`.

@@ -1,5 +1,7 @@
 mod api;
+mod db;
 mod player;
+mod profiles;
 mod ytdlp;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -38,8 +40,24 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "config/mpv".into());
     let player = player::Player::new(player_config)?;
     let monitor = player.monitor();
+    let data_dir = match std::env::var_os("COUCHTUBE_DATA_DIR") {
+        Some(path) => PathBuf::from(path),
+        None => std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(std::env::var_os("HOME").expect("HOME must be set"))
+                    .join(".local/share")
+            })
+            .join("couchtube"),
+    };
+    let profiles = profiles::Profiles::open(data_dir)?;
+    let state = api::AppState {
+        player: player.clone(),
+        profiles,
+        transition: Default::default(),
+    };
     let app = Router::new()
-        .nest("/api", api::router(player.clone()))
+        .nest("/api", api::router(state))
         .fallback_service(frontend)
         .layer(TraceLayer::new_for_http());
 

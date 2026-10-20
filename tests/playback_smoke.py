@@ -41,7 +41,8 @@ def main():
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
         environment = {**os.environ, "PATH": f"{directory}:{os.environ['PATH']}",
-                       "XDG_RUNTIME_DIR": str(directory), "COUCHTUBE_PORT": str(port)}
+                       "XDG_RUNTIME_DIR": str(directory), "COUCHTUBE_PORT": str(port),
+                       "COUCHTUBE_DATA_DIR": str(directory / "data, profiles")}
         log_path = directory / "backend.log"
         with log_path.open("w+") as log:
             backend = subprocess.Popen([str(root / "target/debug/couchtube")],
@@ -106,8 +107,24 @@ def main():
                 wait_for(ready)
                 assert request("stop", {})[0] == 200
                 assert request("status")[1]["playing"] is False
+                profile = request("profiles", {"name": "IPC cookie test"})[1]
+                cookie_folder = directory / "data, profiles/profiles" / profile["id"] / "firefox"
+                (cookie_folder / "cookies.sqlite").touch()
+                assert request(f"profiles/{profile['id']}/select", {})[0] == 200
                 assert request("play", {"id": "aqz-KE-bpKQ"})[0] == 200
                 wait_for(ready)
+                # Verify mpv parses cookie paths containing spaces and commas correctly.
+                ipc = next(directory.glob("couchtube-*/ipc"))
+                with socket.socket(socket.AF_UNIX) as connection:
+                    connection.connect(str(ipc))
+                    connection.sendall(b'{"command":["get_property","options/ytdl-raw-options"],"request_id":99}\n')
+                    with connection.makefile("r") as reader:
+                        while True:
+                            reply = json.loads(reader.readline())
+                            if reply.get("request_id") == 99:
+                                assert reply["data"]["cookies-from-browser"] == f"firefox:{cookie_folder}", reply
+                                assert "ignore-config" in reply["data"], reply
+                                break
                 backend.send_signal(signal.SIGTERM)
                 assert backend.wait(timeout=5) == 0
                 assert all(not Path(f"/proc/{pid}").exists() for pid in pids()), "player survived shutdown"

@@ -284,3 +284,19 @@ kbd {
     animation: none !important;
   }
 }
+
+/* Profiles use real controls, so Tab and the arrow keys both work. */
+.profile-label { margin-left: auto; border-left: 0.25rem solid; padding-left: 0.6rem; }
+.profile-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1.5rem; margin-top: 3rem; }
+button, select { font: inherit; color: var(--text); background: var(--surface); border: 0.15rem solid transparent; border-radius: 0.6rem; padding: 0.7rem 1rem; }
+button:focus-visible, select:focus-visible { outline: 0.18rem solid var(--focus); outline-offset: 0.2rem; }
+button:disabled, select:disabled { opacity: 0.5; }
+.profile-card { display: flex; flex-direction: column; align-items: center; gap: 0.8rem; padding: 1.4rem 0.8rem; }
+.profile-card:focus { outline: 0.2rem solid var(--focus); background: var(--surface-2); }
+.profile-avatar { display: grid; place-items: center; width: 5rem; height: 5rem; border-radius: 1.1rem; font-size: 2.5rem; font-weight: 800; }
+.add-avatar { background: var(--surface-2); }
+.profile-note { font-size: 0.8rem; color: var(--muted); }
+.profile-form { display: grid; gap: 1rem; max-width: 40rem; }
+.profile-form label { display: grid; gap: 0.4rem; }
+.profile-form select { max-width: 16rem; }
+.profile-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 1rem; }

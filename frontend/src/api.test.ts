@@ -28,3 +28,27 @@ describe('playback API', () => {
     await expect(play('aqz-KE-bpKQ')).rejects.toThrow('mpv unavailable')
   })
 })
+
+// Account switching must not reuse another person's searches.
+describe('profile cache', () => {
+  it('keeps in-flight responses and cached results scoped to their profile', async () => {
+    const { search, setProfileScope } = await import('./api')
+    let finishAlice!: (value: unknown) => void
+    const fetcher = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { finishAlice = resolve }))
+      .mockResolvedValueOnce({ ok: true, json: async () => [{ id: 'bob-result' }] })
+    vi.stubGlobal('fetch', fetcher)
+    setProfileScope('alice')
+    const alice = search('isolated-cache-test')
+    setProfileScope('bob')
+    const bob = await search('isolated-cache-test')
+    finishAlice({ ok: true, json: async () => [{ id: 'alice-result' }] })
+    expect(await alice).toEqual([{ id: 'alice-result' }])
+    expect(bob).toEqual([{ id: 'bob-result' }])
+    expect(await search('isolated-cache-test')).toEqual(bob)
+    setProfileScope('alice')
+    expect(await search('isolated-cache-test')).toEqual([{ id: 'alice-result' }])
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    setProfileScope('guest')
+  })
+})

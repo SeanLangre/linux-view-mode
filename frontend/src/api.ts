@@ -23,7 +23,8 @@ const CACHE_MS = 10 * 60 * 1000
 const cache = new Map<string, { at: number; promise: Promise<unknown> }>()
 
 function get<T>(path: string): Promise<T> {
-  const hit = cache.get(path)
+  const cacheKey = `${profileScope}:${path}`
+  const hit = cache.get(cacheKey)
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.promise as Promise<T>
 
   const promise = fetch(path).then(async (res) => {
@@ -31,8 +32,8 @@ function get<T>(path: string): Promise<T> {
     if (!res.ok) throw new Error(body?.error ?? `request failed (${res.status})`)
     return body as T
   })
-  promise.catch(() => cache.delete(path))
-  cache.set(path, { at: Date.now(), promise })
+  promise.catch(() => cache.delete(cacheKey))
+  cache.set(cacheKey, { at: Date.now(), promise })
   return promise
 }
 
@@ -65,3 +66,29 @@ async function playback<T>(path: string, body?: object): Promise<T> {
 export const play = (id: string, start?: number) => playback('play', { id, start })
 export const stop = () => playback('stop', {})
 export const playerStatus = () => playback<PlayerStatus>('status')
+
+export type Profile = { id: string; name: string; color: string }
+export type ProfileList = { profiles: Profile[]; active_id: string }
+export type LoginStatus = {
+  state: 'guest' | 'unknown' | 'signing_in' | 'checking' | 'signed_in' | 'sign_in_again' | 'check_failed'
+  message: string
+}
+
+export const profiles = () => playback<ProfileList>('profiles')
+export const createProfile = (name: string, color: string) => playback<Profile>('profiles', { name, color })
+export const selectProfile = (id: string) => playback<Profile>(`profiles/${encodeURIComponent(id)}/select`, {})
+export const signin = async (id: string) => {
+  const status = await playback<LoginStatus>(`profiles/${encodeURIComponent(id)}/signin`, {})
+  for (const key of cache.keys()) { if (key.startsWith(`${id}:`)) cache.delete(key) }
+  return status
+}
+export const loginStatus = (id: string, check = false) =>
+  playback<LoginStatus>(`profiles/${encodeURIComponent(id)}/status${check ? '?check=true' : ''}`)
+export async function removeProfile(id: string) {
+  const response = await fetch(`/api/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  const body = await response.json().catch(() => null)
+  if (!response.ok) throw new Error(body?.error ?? `request failed (${response.status})`)
+}
+
+let profileScope = 'guest'
+export function setProfileScope(id: string) { profileScope = id }

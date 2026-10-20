@@ -33,13 +33,15 @@ Checklist for [`plan.md`](plan.md). Tick items as they're done.
 - [ ] `--mark-watched` shows up in YouTube history
 - [ ] Login still works after 2–3 days
 
-## Phase 4 — Profiles and sign-in
+## Phase 4 — Profiles and sign-in (implemented; real-account check pending)
 
-- [ ] SQLite (`rusqlite`) + `db.rs`
-- [ ] "Who's watching?" screen, add/remove profile, Guest
-- [ ] Firefox profile per account, sign-in window, login check
-- [ ] yt-dlp and mpv use the active profile's cookies
-- [ ] `p` switches profile
+- [x] SQLite (`rusqlite`) + `db.rs`
+- [x] "Who's watching?" screen, add/remove profile, Guest
+- [x] Firefox profile per account, sign-in window, login check
+- [x] yt-dlp and mpv use the active profile's cookies
+- [x] `p` switches profile
+
+- [ ] Sign in two real accounts, check YouTube accepts both logins, and switch with `p`
 
 ## Phase 5 — Account feeds
 

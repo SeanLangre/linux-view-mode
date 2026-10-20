@@ -35,9 +35,9 @@ const ARROWS: Record<string, Direction> = {
   ArrowRight: 'right',
 }
 
-export default function App() {
+export default function App({ profile, onSwitch }: { profile: api.Profile; onSwitch: () => void }) {
   const [stack, setStack] = useState<Entry[]>([{ screen: { kind: 'home' }, focus: START }])
-  const [recent, setRecent] = useState(loadRecent)
+  const [recent, setRecent] = useState(() => loadRecent(profile.id))
   const [draft, setDraft] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const [playback, setPlayback] = useState<api.PlayerStatus | null>(null)
@@ -136,7 +136,10 @@ export default function App() {
     setStack((s) => [...s, { screen: next, focus: focusAt }])
   const replaceTop = (next: Screen, focusAt: Focus) =>
     setStack((s) => [...s.slice(0, -1), { screen: next, focus: focusAt }])
-  const back = () => setStack((s) => (s.length > 1 ? s.slice(0, -1) : s))
+  const back = () => {
+    if (stack.length === 1) onSwitch()
+    else setStack((s) => s.slice(0, -1))
+  }
   const goHome = () => setStack((s) => [s[0]])
 
   function openSearch() {
@@ -147,7 +150,7 @@ export default function App() {
   function runSearch(raw: string) {
     const query = raw.trim()
     if (!query) return
-    setRecent(addRecent(query))
+    setRecent(addRecent(query, profile.id))
     // Focus aims at the first result; it stays on the input until results arrive.
     const target = { ...START, row: 1 }
     // Replace rather than stack searches, so Back always leads out of search.
@@ -229,6 +232,9 @@ export default function App() {
           e.preventDefault()
           goHome()
           break
+        case 'p':
+          onSwitch()
+          break
         case 'c':
           openChannel()
           break
@@ -265,6 +271,7 @@ export default function App() {
           <span className="logo">▶</span> CouchTube
         </div>
         <div className="crumb">{crumb(screen)}</div>
+        <div className="profile-label" style={{ borderColor: profile.color }}>{profile.name}</div>
       </header>
 
       {screen.kind === 'home' && <h1 className="page-title">What do you want to watch?</h1>}
@@ -301,6 +308,7 @@ export default function App() {
         <span><kbd>Enter</kbd>{videoRowFocused ? 'Play' : 'Select'}</span>
         {videoRowFocused && <span><kbd>C</kbd>Channel</span>}
         <span><kbd>/</kbd>Search</span>
+        <span><kbd>P</kbd>Profiles</span>
         {stack.length > 1 && <span><kbd>Esc</kbd>Back</span>}
       </footer>
 
