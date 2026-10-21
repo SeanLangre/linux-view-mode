@@ -21,6 +21,8 @@ export default function ProfileGate() {
   const operation = useRef(false)
   const managedId = !active && view.kind === 'manage' ? view.profile.id : null
   const login = managedId ? statuses[managedId] : undefined
+  const [qr, setQr] = useState<api.Pairing | null>(null)
+  const signingIn = login?.state === 'signing_in'
   const loginBusy = login !== undefined && BUSY_STATES.has(login.state)
 
   async function refresh() {
@@ -53,6 +55,14 @@ export default function ProfileGate() {
     void poll()
     return () => { cancelled = true; window.clearTimeout(timer) }
   }, [managedId])
+
+  // The phone-keyboard QR code exists only while the sign-in window is open.
+  useEffect(() => {
+    if (!signingIn) { setQr(null); return }
+    let cancelled = false
+    api.pairing().then((result) => { if (!cancelled) setQr(result) }, () => { if (!cancelled) setQr(null) })
+    return () => { cancelled = true }
+  }, [signingIn])
 
   useEffect(() => {
     if (active || loading || busy) return
@@ -171,6 +181,10 @@ export default function ProfileGate() {
         <h1 className="page-title">Connect {view.profile.name} to YouTube</h1>
         <p className="status" role="status">{login?.message ?? 'Getting sign-in status…'}</p>
         <p className="status">Complete sign-in in the Firefox window, then close that window with Alt+F4. CouchTube will check the login.</p>
+        {qr && <div className="pairing">
+          <img alt="QR code" width={240} height={240} src={`data:image/svg+xml;utf8,${encodeURIComponent(qr.svg)}`} />
+          <p className="status">Scan with your phone (same Wi-Fi) to type your email and password there instead of on the TV keyboard.</p>
+        </div>}
         <div className="profile-actions">
           <button data-nav disabled={busy || loginBusy} onClick={() => void choose(view.profile)}>
             {login?.state === 'signed_in' ? 'Continue to CouchTube' : 'Continue without verified sign-in'}

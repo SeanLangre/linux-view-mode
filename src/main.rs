@@ -1,6 +1,7 @@
 mod api;
 mod db;
 mod feeds;
+mod pairing;
 mod playback;
 mod player;
 mod profiles;
@@ -16,6 +17,7 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_PORT: u16 = 7878;
+const DEFAULT_PAIR_PORT: u16 = 7879;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -51,7 +53,12 @@ async fn main() -> Result<()> {
             })
             .join("couchtube"),
     };
-    let profiles = profiles::Profiles::open(data_dir)?;
+    let pair_port = match std::env::var("COUCHTUBE_PAIR_PORT") {
+        Ok(p) => p.parse().context("COUCHTUBE_PAIR_PORT must be a port number")?,
+        Err(_) => DEFAULT_PAIR_PORT,
+    };
+    let pairing = pairing::Pairing::new(pair_port);
+    let profiles = profiles::Profiles::open(data_dir, pairing.clone(), port)?;
     let playback = playback::Playback::new(player.clone(), profiles.db.clone());
     let state = api::AppState {
         playback: playback.clone(),
@@ -71,6 +78,10 @@ async fn main() -> Result<()> {
         }
     });
     let app = Router::new()
+        .route(
+            "/signin",
+            axum::routing::get(|| async { axum::response::Html(include_str!("signin.html")) }),
+        )
         .nest("/api", api::router(state))
         .fallback_service(frontend)
         .layer(TraceLayer::new_for_http());
@@ -85,6 +96,14 @@ async fn main() -> Result<()> {
         frontend_dir.display()
     );
 
+    // The one LAN-facing listener: it only serves the phone keyboard, and only while a
+    // sign-in window is open (every route needs that session's random token).
+    let pair_addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, pair_port));
+    let pair_listener = tokio::net::TcpListener::bind(pair_addr)
+        .await
+        .with_context(|| format!("could not listen on {pair_addr}"))?;
+    let phone = tokio::spawn(axum::serve(pair_listener, pairing.router()).into_future());
+
     let result = axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let ctrl_c = tokio::signal::ctrl_c();
@@ -95,6 +114,7 @@ async fn main() -> Result<()> {
         })
         .await;
     monitor.abort();
+    phone.abort();
     playback.stop().await?;
     result?;
     Ok(())

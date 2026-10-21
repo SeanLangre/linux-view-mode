@@ -39,6 +39,7 @@ pub fn router(state: AppState) -> Router {
         .route("/profiles/{id}/select", post(select_profile))
         .route("/profiles/{id}/signin", post(signin))
         .route("/profiles/{id}/status", get(login_status))
+        .route("/pairing", get(pairing))
         .route("/play", post(play))
         .route("/stop", post(stop))
         .route("/status", get(status))
@@ -335,6 +336,17 @@ async fn signin(
         )
     })?;
     Ok(Json(state.profiles.login_status(&id).await))
+}
+
+async fn pairing(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (url, svg) = state
+        .profiles
+        .pairing
+        .info()
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no sign-in window is open"))?;
+    Ok(Json(json!({"url": url, "svg": svg})))
 }
 
 #[derive(Deserialize)]

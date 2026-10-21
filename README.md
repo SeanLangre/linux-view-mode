@@ -20,8 +20,10 @@ Press Enter on a video to launch fullscreen mpv. Esc or `q` in mpv stops playbac
 Arch Linux:
 
 ```bash
-sudo pacman -S --needed rust nodejs npm yt-dlp mpv firefox curl
+sudo pacman -S --needed rust nodejs npm yt-dlp mpv firefox curl xdotool
 ```
+
+`xdotool` is only needed for typing from a phone during sign-in (see below).
 
 ## Run it
 
@@ -55,6 +57,7 @@ and open `http://127.0.0.1:5173`. Vite forwards `/api` calls to the backend.
 | Environment variable | Default | Meaning |
 |---|---|---|
 | `COUCHTUBE_PORT` | `7878` | Port to listen on (always `127.0.0.1` only) |
+| `COUCHTUBE_PAIR_PORT` | `7879` | Port for the phone keyboard used during sign-in (listens on all interfaces, see below) |
 | `COUCHTUBE_FRONTEND` | `frontend/dist` | Folder with the built frontend |
 | `COUCHTUBE_MPV_CONFIG` | `config/mpv` | mpv config directory, including scripts (relative to the backend working directory) |
 | `COUCHTUBE_DATA_DIR` | `$XDG_DATA_HOME/couchtube` or `~/.local/share/couchtube` | Private SQLite database and account Firefox profiles |
@@ -63,11 +66,37 @@ and open `http://127.0.0.1:5173`. Vite forwards `/api` calls to the backend.
 ## Profiles and sign-in
 
 1. On **Who’s watching?**, choose **Add profile**, enter a name and choose a colour, then press **Create and sign in**.
-2. Sign in to Google in the separate Firefox window. Complete any verification, then close that window with **Alt+F4**.
+2. The separate Firefox window opens on a page with a QR code. Scan it with your phone (see below), then press **Enter** to continue to Google. Sign in with the TV keyboard or the phone, complete any verification, then close that window with **Alt+F4**.
 3. Wait for **YouTube sign-in works**, then choose **Continue to CouchTube**. A failed check can mean a connection or yt-dlp problem; use **Check sign-in** or **Open sign-in again** to retry.
 4. Press **P** while browsing to switch profiles. On the picker, highlight a named profile and press **S** to reopen sign-in or **D** to remove it (with confirmation).
 
 Each account has its own Firefox folder; Guest never loads account cookies. A named profile with no cookie database browses signed out. Profiles and the active selection persist in SQLite, while the picker still appears on startup. Switching profiles stops mpv and opens Home for the selected person. Search results, feeds, recent searches, resume positions and queues are separated by profile. Removing a profile deletes its local sign-in files; deleting the active profile selects Guest.
+
+### Signing in from your phone
+
+The QR code opens a page on your phone that works as a keyboard for the Firefox sign-in window. It does not log in for you and does not use Bluetooth.
+
+How it works: while a sign-in window is open, the backend creates a random 128-bit token and shows `http://<server LAN address>:7879/p/<token>` as a QR code. The phone page sends your text to the backend, which types it into the Firefox window with `xdotool`. Closing the sign-in window ends the session and the link stops working.
+
+Using it: scan the QR code and keep the phone page open. Press Enter on the TV to continue to Google so the email field is showing. On the phone, fill in the email and password (a password manager can do this) and tap **Sign in**. The TV types the email, presses Enter, waits 4 seconds for Google's password page, then types the password and presses Enter. Approve any 2-step prompt on your phone. Below the form are plain keyboard buttons (Type, Tab, Shift+Tab, Enter, Backspace) for anything else, such as a verification code.
+
+Safety:
+- **The password crosses your Wi-Fi unencrypted.** The phone page uses plain HTTP, so someone else on the same network could read what you type. Use it only on a network you trust, never on shared or guest Wi-Fi. HTTPS would need a certificate the phone trusts, so it isn't used.
+- **Port 7879 is the only part of CouchTube reachable from the network.** The main API stays on `127.0.0.1`. The pairing port answers only to the live token, with 404 for anything else, and the token is gone when the sign-in window closes. Anyone who sees the QR code or link while the window is open can type into it, so don't show the TV screen to people you don't trust during sign-in.
+- Typed text is never logged. It is passed to `xdotool` as an argument, not through a shell, and is limited to 256 characters per request.
+- Keep port 7879 closed to the internet. Do not forward it on your router.
+
+Limits:
+- Needs `xdotool`. If it is missing, the phone page shows "the TV could not type".
+- Firefox is started with `MOZ_ENABLE_WAYLAND=0` so that `xdotool` can reach it under XWayland. There is no equivalent that works on KDE's Wayland.
+- The one-tap sign-in is timed: if Google is slow, shows a captcha or an account chooser, or the email isn't focused, it can type into the wrong place. Use the keyboard buttons to finish by hand.
+- Some phone password managers refuse to fill on `http://` pages. If yours does, copy the password from it and paste it into the field.
+- The phone cannot see the TV screen. Click the right field on the TV, or use Tab and Shift+Tab, before typing.
+- If you run the backend as a systemd service, set `DISPLAY` for it, or `xdotool` cannot find the window.
+- The phone and the server must be on the same network. Guest networks and routers with client isolation block it.
+- If the server has a firewall, allow the port for your home network only, for example `sudo ufw allow from 192.168.50.0/24 to any port 7879 proto tcp`.
+- The address in the QR code is the one the OS uses to reach the outside. With a VPN or several network cards it may be the wrong one.
+- Phones may ask for "Local network" or "Nearby devices" permission in the browser. Allow it so the page can load.
 
 The sign-in check requests one item from the account’s subscriptions. Home shows **Continue watching**, **Recommended**, and **Subscriptions**. The Home menu opens **History**, **Watch later**, **Liked**, and **Queue**. Guest and profiles without cookies have local watch history and can search, queue and resume videos; account feeds stay empty until sign-in. Daily cookie refresh is planned for deployment.
 
@@ -124,6 +153,7 @@ If it happens again, note the video ID, whether the picture freezes or breaks up
 | DELETE | `/api/profiles/<id>` | Removes the profile and its local sign-in files |
 | POST | `/api/profiles/<id>/select` | Selects a profile and stops playback |
 | POST | `/api/profiles/<id>/signin` | Opens that profile’s Firefox sign-in window |
+| GET | `/api/pairing` | Phone URL and QR code (SVG) while a sign-in window is open, otherwise 404 |
 | GET | `/api/profiles/<id>/status` | `{state, message}`; `?check=true` starts a login check |
 | GET | `/api/health` | `{"status":"ok"}` |
 | GET | `/api/feed/<kind>` | Video list: `continue`, `recommended`, `subscriptions`, `history`, `watchlater`, `liked`; `?refresh=true` bypasses the feed cache |

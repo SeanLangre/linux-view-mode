@@ -1,6 +1,7 @@
 //! Account directories and the Firefox sign-in lifecycle. Cookie contents never enter logs.
 use crate::{
     db::{Database, Profile},
+    pairing::Pairing,
     ytdlp,
 };
 use anyhow::{Context, Result, bail};
@@ -63,6 +64,8 @@ impl Account {
 #[derive(Clone)]
 pub struct Profiles {
     pub db: Database,
+    pub pairing: Pairing,
+    signin_url: String,
     root: PathBuf,
     runtime: Arc<Mutex<HashMap<String, Runtime>>>,
 }
@@ -93,7 +96,7 @@ pub fn private_directory(path: &Path) -> Result<()> {
 }
 
 impl Profiles {
-    pub fn open(root: PathBuf) -> Result<Self> {
+    pub fn open(root: PathBuf, pairing: Pairing, port: u16) -> Result<Self> {
         private_directory(&root)?;
         let root = root.canonicalize()?;
         private_directory(&root.join("profiles"))?;
@@ -104,6 +107,8 @@ impl Profiles {
         )?;
         Ok(Self {
             db,
+            pairing,
+            signin_url: format!("http://127.0.0.1:{port}/signin"),
             root,
             runtime: Arc::new(Mutex::new(HashMap::new())),
         })
@@ -182,13 +187,18 @@ impl Profiles {
         let mut child = Command::new("firefox")
             .args(["--new-instance", "--no-remote", "--profile"])
             .arg(folder)
-            .arg("https://accounts.google.com/ServiceLogin?continue=https://www.youtube.com")
+            .arg(&self.signin_url)
+            // X11 mode, so the phone keyboard can type into the window with xdotool.
+            .env("MOZ_ENABLE_WAYLAND", "0")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .kill_on_drop(true)
             .spawn()
             .context("could not open Firefox")?;
+        if let Err(err) = self.pairing.start(child.id()).await {
+            tracing::warn!("phone pairing unavailable: {err:#}");
+        }
         self.set_status(
             &account.profile.id,
             LoginStatus::new(
@@ -199,7 +209,9 @@ impl Profiles {
         .await;
         let profiles = self.clone();
         tokio::spawn(async move {
-            match child.wait().await {
+            let exit = child.wait().await;
+            profiles.pairing.end().await;
+            match exit {
                 Ok(exit) if exit.success() => { profiles.check(account).await; }
                 _ => profiles.set_status(&account.profile.id, LoginStatus::new(LoginState::CheckFailed, "Firefox did not close normally. Open sign-in again or check the login.")).await,
             }
@@ -281,7 +293,7 @@ mod tests {
     #[tokio::test]
     async fn profiles_use_private_isolated_directories_and_guest_has_no_cookies() {
         let root = std::env::temp_dir().join(format!("ct-profiles-{}", std::process::id()));
-        let profiles = Profiles::open(root.clone()).unwrap();
+        let profiles = Profiles::open(root.clone(), Pairing::new(0), 0).unwrap();
         let first = profiles.create("Alice", "#aabbcc").await.unwrap();
         let second = profiles.create("Bob", "#ddeeff").await.unwrap();
         let first = profiles.account(&first.id).await.unwrap().unwrap();
