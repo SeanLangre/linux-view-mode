@@ -1,0 +1,17 @@
+[Unit]
+Description=CouchTube backend
+After=graphical-session.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=COUCHTUBE_FRONTEND=%h/.local/share/couchtube/app/frontend
+Environment=COUCHTUBE_MPV_CONFIG=%h/.local/share/couchtube/app/config/mpv
+# mpv and the phone keyboard (xdotool, via XWayland) need the desktop session's display.
+PassEnvironment=DISPLAY WAYLAND_DISPLAY XDG_RUNTIME_DIR
+ExecStart=%h/.local/share/couchtube/app/bin/couchtube
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

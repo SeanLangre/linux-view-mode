@@ -25,6 +25,7 @@ type Row =
 const HOME_MENU = [
   { label: 'History', action: 'history' }, { label: 'Watch later', action: 'watchlater' },
   { label: 'Liked', action: 'liked' }, { label: 'Queue', action: 'queue' },
+  { label: 'Exit to desktop', action: 'exit' },
 ]
 const FEED_NAMES: Record<api.FeedKind, string> = {
   continue: 'Continue watching', recommended: 'Recommended', subscriptions: 'Subscriptions',
@@ -219,6 +220,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
       case 'menu': {
         const action = focusedRow.items[focus.col]?.action
         if (action === 'queue') push({ kind: 'queue' })
+        else if (action === 'exit') void api.exitToDesktop().catch((err: Error) => notify(err.message))
         else if (action === 'next' || action === 'clear') void queueAction(action)
         else if (action) push({ kind: 'feed', feed: action as api.FeedKind })
         break

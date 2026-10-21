@@ -39,6 +39,7 @@ pub fn router(state: AppState) -> Router {
         .route("/profiles/{id}/select", post(select_profile))
         .route("/profiles/{id}/signin", post(signin))
         .route("/profiles/{id}/status", get(login_status))
+        .route("/system/exit", post(exit_to_desktop))
         .route("/pairing", get(pairing).post(start_pairing).delete(cancel_pairing))
         .route("/play", post(play))
         .route("/stop", post(stop))
@@ -357,6 +358,30 @@ async fn signin(
         )
     })?;
     Ok(Json(state.profiles.login_status(&id).await))
+}
+
+/// Stop the kiosk service so the desktop shows; the launcher or `systemctl --user start
+/// couchtube-kiosk` brings it back. Only works when the kiosk runs as that systemd unit.
+async fn exit_to_desktop(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let active = tokio::process::Command::new("systemctl")
+        .args(["--user", "is-active", "--quiet", "couchtube-kiosk"])
+        .status()
+        .await
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if !active {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "the kiosk isn't running as a service here; close the window with Alt+F4",
+        ));
+    }
+    state.playback.stop().await.map_err(internal)?;
+    // The stop kills the browser that asked, so don't wait for it.
+    tokio::process::Command::new("systemctl")
+        .args(["--user", "stop", "--no-block", "couchtube-kiosk"])
+        .spawn()
+        .map_err(|_| ApiError::new(StatusCode::BAD_GATEWAY, "could not run systemctl"))?;
+    Ok(Json(json!({"status": "exiting"})))
 }
 
 /// Start the phone link before Firefox opens, so the QR code can be scanned first.

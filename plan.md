@@ -14,7 +14,8 @@ How to run the code is in `README.md`; the working checklist is `TODO.md`.
 | 3 — Playback | Implemented; user test positive, explicit focus check pending |
 | 4 — Profiles and sign-in | Implemented with phone pairing; user test positive, two-account check and sign-in review fixes pending |
 | 5 — Account feeds | Implemented; real-account verification pending |
-| 6–7 | Not started |
+| 6 — Deploy | Written (`deploy/`, exit to desktop); not yet run on the server; auto-login/power settings manual |
+| 7 — Polish | Not started |
 
 ---
 
@@ -79,13 +80,13 @@ How to run the code is in `README.md`; the working checklist is `TODO.md`.
 ### Signing in (once per account, from the TV)
 1. "Add account" in the UI → backend opens a separate Firefox window (X11 mode, `MOZ_ENABLE_WAYLAND=0`):
    `firefox --new-instance --no-remote --profile <dir> http://127.0.0.1:7878/signin`
-   That page shows a QR code for phone pairing and a link to `accounts.google.com/ServiceLogin?continue=https://www.youtube.com`.
+   Before that, the UI shows the phone-pairing QR code; Firefox opens only when the user chooses **Open Firefox sign-in**. The start page links to `accounts.google.com/ServiceLogin?continue=https://www.youtube.com`.
 2. Sign in with the TV keyboard, or from the phone page (see below). Approve 2FA on your phone.
 3. The backend polls the profile's `cookies.sqlite` (a copy, since Firefox holds it open) every 2 s. Once YouTube's `LOGIN_INFO` cookie has been seen three times in a row, it closes Firefox so the cookies are flushed.
 4. Backend checks the login works by fetching one item of `:ytsubs`. The profile shows a ✓ or "Sign in again".
 
 ### Phone pairing (`pairing.rs`)
-- While a sign-in window is open, a random 128-bit token is live; the TV shows `http://<LAN IP>:7879/p/<token>` as a QR code. Closing the window ends the token.
+- From when the profile is created (or sign-in opened) until the sign-in window closes, a random 128-bit token is live; the CouchTube UI shows `http://<LAN IP>:7879/p/<token>` as a QR code and as text. Before Firefox opens, typing is refused with "window isn't open yet" (HTTP 425), and an unused session expires after 15 minutes or when the user leaves the screen. Closing the window ends the token.
 - The phone page has three steps, each a separate request: email, password, and an optional 2-step code. Each types the text into the Firefox window and presses Enter. The email and password steps work once per session (a failed attempt is given back); the code step up to 3 times. There are no other typing routes.
 - Typing fails closed: the window is found by process id, focused, and focus is checked before typing and before Enter. The text goes to `xdotool type --file -` on stdin, never as an argument. `--window` isn't used because it sends synthetic events Firefox ignores.
 - Port 7879 listens on all interfaces **only while a sign-in window is open**, and is the only part of CouchTube reachable from the network. Plain HTTP: the password crosses the LAN unencrypted, so only use it on a trusted network (an encrypted form is still planned: see `TODO.md`).
@@ -176,7 +177,7 @@ React 19 + TypeScript + Vite 8, tested with vitest, linted with oxlint. No UI li
 | POST | `/api/profiles/:id/select` ✅ | Set the active profile |
 | POST | `/api/profiles/:id/signin` ✅ | Open the sign-in window |
 | GET | `/api/profiles/:id/status` ✅ | Login state/message; `?check=true` starts a check |
-| GET | `/api/pairing` ✅ | Phone URL and QR SVG while a sign-in window is open, else 404 |
+| GET/POST/DELETE | `/api/pairing` ✅ | Phone URL and QR SVG while a sign-in is in progress, else 404; POST starts it before Firefox opens; DELETE cancels it if no window is open |
 | GET | `/signin` ✅ | Sign-in start page shown in the account Firefox window |
 | GET/POST | `:7879/p/:token`, `/p/:token/{email,password,code}` ✅ | Phone page and its three typing steps (LAN, token required, only while signing in) |
 | GET | `/api/feed/:kind` ✅ | `continue`, `recommended`, `subscriptions`, `history`, `watchlater`, `liked` |
@@ -187,7 +188,7 @@ React 19 + TypeScript + Vite 8, tested with vitest, linted with oxlint. No UI li
 | GET/POST/DELETE | `/api/queue` ✅ | Queue for the active profile; DELETE `/api/queue/:id` removes one |
 | POST | `/api/next` ✅ | Stop and play the next queued item |
 | POST | `/api/fallback/youtube-tv` | Open youtube.com/tv in the active profile's Firefox |
-| POST | `/api/system/exit` | Close kiosk and go back to the desktop |
+| POST | `/api/system/exit` ✅ | Stop the kiosk service and go back to the desktop |
 
 ### Data (SQLite, `~/.local/share/couchtube/couchtube.db`)
 - `profiles(id, name, color, created_at)` and `settings(key, value)` store profiles and active selection
@@ -303,7 +304,7 @@ Backend tests cover process replacement, stop, failed exits and IPC replies; fro
 - Sign-in status tracks Firefox opening/closing and a single-item `:ytsubs` check, with a manual retry.
 - Verified with simulated account tools: isolation of cookies, Guest, login/check failures, deletion and restart persistence. Headless Chromium exercised Guest → add/sign-in → playback/return → remove → switch using keyboard events. Real mpv IPC confirmed cookie paths with spaces/commas are passed correctly. The user subsequently reported the real profile/sign-in flow worked well (2026-10-20). The exact two-account switching check remains to be confirmed.
 - "Who's watching?" screen, add/remove profile, Firefox profile setup (`user.js`, uBlock Origin, SponsorBlock), sign-in window, login check, Guest profile.
-- Phone pairing (QR code → LAN page → `xdotool` types email and password) added 2026-10-21; the sign-in window now closes itself once the login cookie appears. A safety/accessibility review the same day left follow-ups in `TODO.md`.
+- Phone pairing (QR code → LAN page → `xdotool` types email and password) added 2026-10-21; the sign-in window now closes itself once the login cookie appears. A safety/accessibility review the same day was then implemented: fail-closed typing, three phone steps instead of a timed delay, text on stdin, single-use steps, port open only during sign-in, a `Host` check on the main server, and accessibility fixes. Only the encrypted phone form remains (`TODO.md`). The QR code is shown only in the CouchTube UI, which asks to open Firefox separately. The user tried the phone flow and reported it "kind of worked"; the details weren't given.
 - yt-dlp and mpv use the active profile's login.
 - **Done when:** two accounts can be signed in and switched with `p`.
 
@@ -320,6 +321,7 @@ Backend tests cover process replacement, stop, failed exits and IPC replies; fro
 - **Done when:** each person sees their own YouTube home, and what they watch appears in their YouTube history.
 
 ### Phase 6 — Deploy and appliance mode
+Written (`deploy/`, `POST /api/system/exit`, Home menu item); not yet run on the server. Auto-login and power settings stay manual and are in the README.
 - `install.sh` (run on the server): `cargo build --release`, `npm ci && npm run build`, install to `~/.local/share/couchtube/`, copy the systemd user units, `sudo` copy `policies.json` to `/etc/firefox/policies/`, `systemctl --user daemon-reload && systemctl --user restart couchtube couchtube-kiosk`.
 - `couchtube.service` (backend, `Restart=on-failure`).
 - `couchtube-kiosk.service`: `firefox --kiosk --new-instance --profile ~/.local/share/couchtube/kiosk-firefox http://127.0.0.1:7878`, `Restart=always`.

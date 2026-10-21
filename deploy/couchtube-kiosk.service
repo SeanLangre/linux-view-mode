@@ -1,0 +1,17 @@
+[Unit]
+Description=CouchTube Firefox kiosk
+After=couchtube.service graphical-session.target
+Requires=couchtube.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# Its own profile: account logins never load in the interface.
+ExecStartPre=/usr/bin/mkdir -p %h/.local/share/couchtube/kiosk-firefox
+ExecStartPre=/usr/bin/bash -c 'for _ in $(seq 100); do curl -fs http://127.0.0.1:7878/api/health >/dev/null && exit 0; sleep 0.2; done; exit 1'
+ExecStart=/usr/bin/firefox --kiosk --new-instance --no-remote --profile %h/.local/share/couchtube/kiosk-firefox http://127.0.0.1:7878
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

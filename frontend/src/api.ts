@@ -115,3 +115,5 @@ export async function deleteQueue(id?: string) {
   const body = await res.json().catch(() => null)
   if (!res.ok) throw new Error(body?.error ?? `request failed (${res.status})`)
 }
+
+export const exitToDesktop = () => playback<{ status: string }>('system/exit', {})

@@ -1,0 +1,9 @@
+#!/bin/bash
+# Re-checks every profile's YouTube login through the running backend. Each check makes yt-dlp
+# read the profile's cookies, which also lets Firefox-side cookie rotation be noticed early.
+set -euo pipefail
+base="http://127.0.0.1:${COUCHTUBE_PORT:-7878}/api"
+ids=$(curl -fs "$base/profiles" | grep -o '"id":"[0-9a-f]\{32\}"' | cut -d'"' -f4)
+for id in $ids; do
+    curl -fs "$base/profiles/$id/status?check=true" >/dev/null || echo "couchtube-refresh: check failed for $id" >&2
+done

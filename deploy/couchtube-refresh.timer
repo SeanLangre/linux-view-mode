@@ -1,0 +1,10 @@
+[Unit]
+Description=Check every CouchTube sign-in once a day
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

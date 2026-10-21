@@ -9,6 +9,8 @@ Checklist for [`plan.md`](plan.md). Tick items as they're done.
 - [x] Phase 4 committed (`6d11404`); user reported the profile/sign-in flow worked well
 - [x] Implement Phase 5 account feeds, progress/history and queue
 - [ ] Test personal feeds, resume, queue and YouTube watched-history sync with a real account
+- [ ] Phone keyboard: user said it "kind of worked"; find out what fell short (backend log line `phone typing failed`)
+- [ ] Run `deploy/install.sh` on the dev machine or server and confirm the kiosk restarts after killing Firefox
 
 ## Phase 3 — Playback (implemented; user test positive, focus follow-up pending)
 
@@ -84,11 +86,11 @@ Accessibility:
 
 ## Phase 6 — Deploy and appliance mode
 
-- [ ] `deploy/install.sh`
-- [ ] systemd user units: backend, kiosk, daily cookie refresh
-- [ ] Deploy the supplied `config/firefox/policies.json` (uBlock Origin + SponsorBlock) and `user.js`
-- [ ] KDE auto-login; no screen lock, blanking or sleep
-- [ ] "Exit to desktop" and a shortcut to restart the kiosk
+- [x] `deploy/install.sh` (written and syntax-checked; not yet run on the server)
+- [x] systemd user units: backend, kiosk, daily cookie refresh (`deploy/`; the refresh re-runs each profile's sign-in check)
+- [x] Deploy the supplied `config/firefox/policies.json` (uBlock Origin + SponsorBlock) via `install.sh`; `user.js` is already copied into account profiles
+- [ ] KDE auto-login; no screen lock, blanking or sleep (manual Plasma settings, documented in the README)
+- [x] "Exit to desktop" (Home menu, `POST /api/system/exit`) and a `couchtube-kiosk.desktop` launcher to bind a KDE shortcut to
 
 ## Phase 7 — Polish
 

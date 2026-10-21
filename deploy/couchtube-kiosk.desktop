@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=CouchTube kiosk
+Comment=Start the CouchTube full-screen interface again
+Exec=systemctl --user start couchtube-kiosk
+Icon=couchtube
+Categories=AudioVideo;Video;
+Terminal=false

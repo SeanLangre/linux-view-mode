@@ -1,0 +1,7 @@
+[Unit]
+Description=CouchTube sign-in check for every profile
+After=couchtube.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/couchtube/app/bin/couchtube-refresh

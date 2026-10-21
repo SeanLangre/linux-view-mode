@@ -11,7 +11,7 @@ The full design and roadmap are in [`plan.md`](plan.md); the working checklist i
 
 | Works now | Coming next |
 |---|---|
-| Search, channel pages, keyboard navigation, back stack, recent searches, mpv playback, profiles/sign-in, account feeds, resume, queue and watched-history sync | Boot-to-TV setup (Phase 6), polish (Phase 7) |
+| Search, channel pages, keyboard navigation, back stack, recent searches, mpv playback, profiles/sign-in (with phone keyboard), account feeds, resume, queue, watched-history sync, and the deploy scripts (`deploy/`, written but not yet run on the server) | Real-account and server checks, polish (Phase 7) |
 
 Press Enter on a video to launch fullscreen mpv. Esc or `q` in mpv stops playback; the interface keeps the same screen and selected card. The user has tested playback and profile sign-in successfully on the dev machine. Explicit Firefox kiosk stacking/focus-return and two-account switching checks remain on the checklist.
 
@@ -50,7 +50,7 @@ Keep `cargo run` running, then in another terminal:
 cd frontend && npm run dev
 ```
 
-and open `http://127.0.0.1:5173`. Vite forwards `/api` calls to the backend.
+and open `http://127.0.0.1:5173`. Vite forwards `/api` calls to the backend (with `changeOrigin`, because the backend rejects any `Host` other than `127.0.0.1:<port>` or `localhost:<port>`).
 
 ### Settings
 
@@ -66,9 +66,9 @@ and open `http://127.0.0.1:5173`. Vite forwards `/api` calls to the backend.
 ## Profiles and sign-in
 
 1. On **Who’s watching?**, choose **Add profile**, enter a name and choose a colour, then press **Create and sign in**. A QR code for your phone appears first; Firefox opens only when you choose **Open Firefox sign-in**.
-2. The separate Firefox window opens on a page with a QR code. Scan it with your phone (see below), then press **Enter** to continue to Google. Sign in with the TV keyboard or the phone and complete any verification. The window closes by itself a few seconds after YouTube's login cookie appears; to give up, close it with **Alt+F4**.
+2. Scan the QR code with your phone (see below), then choose **Open Firefox sign-in**. A separate Firefox window opens on a start page; press **Enter** to continue to Google. Sign in with the TV keyboard or the phone and complete any verification. The window closes by itself a few seconds after YouTube's login cookie appears; to give up, close it with **Alt+F4**.
 3. Wait for **YouTube sign-in works**, then choose **Continue to CouchTube**. A failed check can mean a connection or yt-dlp problem; use **Check sign-in** or **Open sign-in again** to retry.
-4. Press **P** while browsing to switch profiles. On the picker, highlight a named profile and press **S** to reopen sign-in or **D** to remove it (with confirmation).
+4. Press **P** while browsing to switch profiles. On the picker, highlight a named profile and press **S** to open sign-in (this opens Firefox straight away) or **D** to remove it (with confirmation).
 
 Each account has its own Firefox folder; Guest never loads account cookies. A named profile with no cookie database browses signed out. Profiles and the active selection persist in SQLite, while the picker still appears on startup. Switching profiles stops mpv and opens Home for the selected person. Search results, feeds, recent searches, resume positions and queues are separated by profile. Removing a profile deletes its local sign-in files; deleting the active profile selects Guest.
 
@@ -159,6 +159,7 @@ If it happens again, note the video ID, whether the picture freezes or breaks up
 | POST | `/api/profiles/<id>/signin` | Opens that profile’s Firefox sign-in window |
 | GET/POST/DELETE | `/api/pairing` | Phone URL and QR code (SVG) while a sign-in is in progress, otherwise 404; POST starts it before Firefox opens, DELETE cancels it if no window is open |
 | GET | `/api/profiles/<id>/status` | `{state, message}`; `?check=true` starts a login check |
+| POST | `/api/system/exit` | Stops the kiosk service (only when it runs as the systemd unit) |
 | GET | `/api/health` | `{"status":"ok"}` |
 | GET | `/api/feed/<kind>` | Video list: `continue`, `recommended`, `subscriptions`, `history`, `watchlater`, `liked`; `?refresh=true` bypasses the feed cache |
 | GET | `/api/queue` | Active profile’s queue in playback order |
@@ -203,3 +204,14 @@ config/firefox/ Account preferences and extension policy
 plan.md         Design and roadmap
 TODO.md         Checklist
 ```
+
+## Running as a TV appliance
+
+On the server, from a checkout: `./deploy/install.sh`. It builds the backend and frontend, installs them to `~/.local/share/couchtube/app`, installs the systemd user units (`couchtube`, `couchtube-kiosk`, and a daily `couchtube-refresh` timer that re-checks each profile's sign-in), copies `config/firefox/policies.json` to `/etc/firefox/policies/` with `sudo` (it never overwrites a different existing file), and restarts the services. It needs `cargo npm firefox mpv yt-dlp xdotool curl`.
+
+Set these in Plasma by hand (CouchTube does not change them):
+- System Settings → Users / Login Screen: automatic login for the TV user.
+- Screen Locking: off. Energy Saving: no screen blanking, no sleep.
+- Optional: bind a KDE shortcut (System Settings → Shortcuts) to the **CouchTube kiosk** launcher, which runs `systemctl --user start couchtube-kiosk`.
+
+**Exit to desktop** (last item in the Home menu) stops the kiosk service; the launcher or `systemctl --user start couchtube-kiosk` starts it again. Firefox restarts by itself if it crashes. The services need the desktop session's `DISPLAY` and `WAYLAND_DISPLAY`; if mpv or the phone keyboard can't open a window, run `systemctl --user import-environment DISPLAY WAYLAND_DISPLAY` once and restart `couchtube`.
