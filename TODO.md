@@ -13,6 +13,16 @@ Checklist for [`plan.md`](plan.md). Tick items as they're done; move finished se
 - [ ] Encrypt the phone form against passive Wi-Fi sniffing: one-time key in the QR URL `#fragment`, inline crypto (e.g. tweetnacl; no WebCrypto on plain HTTP). Remaining main risk
 - [ ] (Accepted, low) `type_and_enter`: the second focus check only guards Enter; if focus moves mid-typing (up to ~3 s for 256 characters) the text already went elsewhere
 
+## Alternative login tests (`alternative_login.md`; wording is already in the UI and docs, results decide what stays)
+
+- [x] Result 2026-10-21: on the user's real account, Google's password page offered no "Try another way". The account isn't to be changed, so passkey/prompt is only a bonus where available; the phone keyboard and `encryption-plan.md` stay the main path
+- [ ] Passkey on the dev machine (Firefox 157, Bluetooth), only on an account that already has a passkey: `firefox --new-instance --no-remote --profile <dir>`, accounts.google.com, "Use your passkey". Does a QR code appear, does the phone connect over Bluetooth, does `LOGIN_INFO` land in `cookies.sqlite` and the profile show ✓? Record the Firefox version
+- [ ] Same, with Firefox started by the `couchtube` systemd user unit; if Bluetooth/D-Bus is missing, pass the D-Bus environment in `deploy/couchtube.service`
+- [ ] Google prompt: email only; does Google skip the password, and do the cookies work afterwards?
+- [ ] RN96 after the Arch install: `bluetoothctl list` shows an adapter, then repeat the passkey test
+- [ ] Daily cookie refresh still works for a passkey-signed-in profile
+- [ ] Depending on results, reduce `encryption-plan.md` (see "Effect on the encryption plan")
+
 ## Testing still to record
 
 - [ ] Phase 3: on the dev machine (KDE Wayland), mpv opens above the Firefox kiosk and focus returns when it quits; add a KWin rule if not

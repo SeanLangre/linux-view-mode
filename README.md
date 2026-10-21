@@ -66,7 +66,7 @@ and open `http://127.0.0.1:5173`. Vite forwards `/api` calls to the backend (wit
 ## Profiles and sign-in
 
 1. On **Who’s watching?**, choose **Add profile**, enter a name and choose a colour, then press **Create and sign in**. A QR code for your phone appears first; Firefox opens only when you choose **Open Firefox sign-in**.
-2. Scan the QR code with your phone (see below), then choose **Open Firefox sign-in**. A separate Firefox window opens on a start page; press **Enter** to continue to Google. Sign in with the TV keyboard or the phone and complete any verification. The window closes by itself a few seconds after YouTube's login cookie appears; to give up, close it with **Alt+F4**.
+2. Sign in with the **phone keyboard** (CouchTube's QR code, below) or the TV keyboard. If Google offers **Try another way** on its page, a passkey or a "Tap Yes" prompt on your phone avoids typing the password at all; this depends on the account, which CouchTube never asks you to change, and is untested here (see `TODO.md`). Choose **Open Firefox sign-in**. A separate Firefox window opens on a start page; press **Enter** to continue to Google. Sign in with the TV keyboard or the phone and complete any verification. The window closes by itself a few seconds after YouTube's login cookie appears; to give up, close it with **Alt+F4**.
 3. Wait for **YouTube sign-in works**, then choose **Continue to CouchTube**. A failed check can mean a connection or yt-dlp problem; use **Check sign-in** or **Open sign-in again** to retry.
 4. Press **P** while browsing to switch profiles. On the picker, highlight a named profile and press **S** to open sign-in (this opens Firefox straight away) or **D** to remove it (with confirmation).
 

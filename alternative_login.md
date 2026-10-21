@@ -8,6 +8,30 @@ sign-in, using Google's own methods.
 Related: [`encryption-plan.md`](encryption-plan.md). If this works, encrypted typing becomes the
 fallback rather than the main path (see "Effect on the encryption plan").
 
+## Status (2026-10-21): shelved, not the main path
+First real test, on the user's own account through CouchTube's sign-in window: after the email,
+Google showed **only the password page**. There was no "Try another way", so no passkey and no
+phone prompt were offered.
+
+What we learned:
+- **It depends on the account, not on CouchTube.** Google lists "Use your passkey" only if the
+  account already has a passkey, and "Tap Yes" only if a phone prompt is set up. A new, unknown
+  Firefox profile can also make Google show fewer options.
+- **CouchTube's Firefox prefs aren't the cause.** `config/firefox/user.js` doesn't touch WebAuthn
+  or passkeys.
+- **Users must not be asked to change their account.** So passkey and prompt can only ever be a
+  bonus for accounts that already offer them. They can't be the recommended path or the fix for
+  the password crossing the Wi-Fi.
+- **Wording was tried and removed.** Text promising passkeys was added to `src/signin.html`,
+  `src/pairing.html` and `frontend/src/ProfileGate.tsx`, then taken out by the user. Don't
+  reintroduce it unless the tests below show it works. If it comes back, make it conditional
+  ("if Google offers *Try another way*"), never a step.
+- **Phone keyboard stays the main path**, so [`encryption-plan.md`](encryption-plan.md) is still
+  the fix for the password being sent in plain text. The "neither works" case below applies.
+
+Still untested, and only worth doing on an account that already has a passkey or phone prompt:
+tests 1 to 5 below (tracked in `TODO.md`).
+
 ## Why not copy cookies from another device
 The rejected option was signing in on another browser and copying the cookies to the TV.
 - Phone browsers (Chrome, Safari) can't export cookies, so a laptop would be needed.
@@ -47,7 +71,10 @@ The rejected option was signing in on another browser and copying the cookies to
 - **It's weaker than a passkey:** the attacker could start a sign-in at the same moment as the user
   (prompt bombing), and the number match is only partial protection. Fine as a second choice.
 
-## What changes in CouchTube
+## What would change in CouchTube (not applied, see Status)
+These were drafted, then reverted. Apply them only if the tests show passkeys or prompts work,
+and word them as optional ("if Google offers *Try another way*").
+
 | Where | Change |
 |---|---|
 | `src/signin.html` | Above "Continue to Google sign-in", say how to sign in without a password: "After your email, choose **Use your passkey** and scan the QR code with your phone, or approve the prompt on your phone. Use the phone keyboard or TV keyboard only if Google asks for a password." |
@@ -73,6 +100,10 @@ after **Use your passkey** is chosen, so they're never shown together.
 - If neither works: `encryption-plan.md` stays the main path, unchanged.
 
 ## Tests to do first (decide before writing code)
+Run these only with an account that already has a passkey or phone prompt. A test account that
+shows just the password page (like the user's) can't pass them. In CouchTube the route is: create
+a profile, **Open Firefox sign-in**, Enter, email, then **Try another way** on the password page.
+
 1. **Passkeys on the dev machine** (Firefox 157, Bluetooth adapter present): start the sign-in
    profile the same way CouchTube does (`firefox --new-instance --no-remote --profile <dir>`), go
    to accounts.google.com, choose **Use your passkey**, and check that:
