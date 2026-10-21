@@ -4,7 +4,7 @@
 <title>CouchTube sign-in</title>
 <style>
   body { font: 18px system-ui, sans-serif; margin: 16px; background: #111; color: #eee; }
-  input[type=text], input[type=password], input[type=email] { width: 100%; box-sizing: border-box; font-size: 20px; padding: 12px; margin: 8px 0; }
+  input { width: 100%; box-sizing: border-box; font-size: 20px; padding: 12px; margin: 8px 0; }
   button { font-size: 18px; padding: 12px 16px; margin: 4px 4px 4px 0; }
   #msg { min-height: 1.5em; color: #f99; }
 </style>
@@ -15,42 +15,19 @@
   <input id="pass" name="password" type="password" autocomplete="current-password" placeholder="Password" required>
   <button type="submit" id="go">Sign in</button>
 </form>
-<h3>Other keys</h3>
-<p>For codes or anything else, click the field on the TV and type here.</p>
-<input id="t" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
-<label><input id="hide" type="checkbox" checked> Hide text</label>
-<div>
-  <button id="send">Type</button>
-  <button id="sendEnter">Type + Enter</button>
-</div>
-<div>
-  <button data-key="tab">Tab</button>
-  <button data-key="shift-tab">Shift+Tab</button>
-  <button data-key="enter">Enter</button>
-  <button data-key="backspace">⌫</button>
-</div>
 <p id="msg" role="status"></p>
 <script>
-  const base = location.pathname, t = document.getElementById('t'), msg = document.getElementById('msg')
-  async function post(path, body) {
-    msg.style.color = ''; msg.textContent = ''
-    const res = await fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-    if (!res.ok) msg.textContent = (await res.json().catch(() => null))?.error ?? 'failed'
-    return res.ok
-  }
-  async function type(enter) {
-    if (t.value && await post('/type', { text: t.value })) { t.value = ''; if (enter) await post('/key', { key: 'enter' }) }
-  }
+  const msg = document.getElementById('msg')
   document.getElementById('login').onsubmit = async (e) => {
     e.preventDefault()
     const go = document.getElementById('go'), pass = document.getElementById('pass')
     go.disabled = true; msg.style.color = '#9cf'; msg.textContent = 'Signing in on the TV…'
-    const ok = await post('/login', { email: document.getElementById('email').value, password: pass.value })
-    go.disabled = false; msg.style.color = ''
-    if (ok) { pass.value = ''; msg.style.color = '#9f9'; msg.textContent = 'Sent. Check the TV for 2-step verification.' }
+    const res = await fetch(location.pathname + '/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: document.getElementById('email').value, password: pass.value }),
+    })
+    go.disabled = false
+    if (res.ok) { pass.value = ''; msg.style.color = '#9f9'; msg.textContent = 'Sent. Check the TV for 2-step verification.' }
+    else { msg.style.color = '#f99'; msg.textContent = (await res.json().catch(() => null))?.error ?? 'failed' }
   }
-  document.getElementById('hide').onchange = (e) => { t.type = e.target.checked ? 'password' : 'text' }
-  document.getElementById('send').onclick = () => type(false)
-  document.getElementById('sendEnter').onclick = () => type(true)
-  document.querySelectorAll('[data-key]').forEach((b) => { b.onclick = () => post('/key', { key: b.dataset.key }) })
 </script>

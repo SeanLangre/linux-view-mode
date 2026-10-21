@@ -74,8 +74,6 @@ impl Pairing {
     pub fn router(&self) -> Router {
         Router::new()
             .route("/p/{token}", get(page))
-            .route("/p/{token}/type", post(type_text))
-            .route("/p/{token}/key", post(press_key))
             .route("/p/{token}/login", post(login))
             .with_state(self.clone())
     }
@@ -89,17 +87,9 @@ fn lan_address() -> Result<std::net::IpAddr> {
 }
 
 #[derive(Deserialize)]
-struct TypeBody {
-    text: String,
-}
-#[derive(Deserialize)]
 struct LoginBody {
     email: String,
     password: String,
-}
-#[derive(Deserialize)]
-struct KeyBody {
-    key: String,
 }
 
 fn failure(status: StatusCode, message: &str) -> Response {
@@ -111,20 +101,6 @@ async fn page(State(pairing): State<Pairing>, Path(token): Path<String>) -> Resp
         Some(_) => Html(PAGE).into_response(),
         None => failure(StatusCode::NOT_FOUND, "this sign-in link has expired"),
     }
-}
-
-async fn type_text(
-    State(pairing): State<Pairing>,
-    Path(token): Path<String>,
-    Json(body): Json<TypeBody>,
-) -> Response {
-    let Some(pid) = pairing.check(&token).await else {
-        return failure(StatusCode::NOT_FOUND, "this sign-in link has expired");
-    };
-    if body.text.is_empty() || body.text.chars().count() > MAX_TEXT || body.text.contains('\0') {
-        return failure(StatusCode::BAD_REQUEST, "text must be 1-256 characters");
-    }
-    xdotool(pid, &["type", "--clearmodifiers", "--delay", "12", "--", &body.text]).await
 }
 
 /// Google asks for the email first, then loads the password page.
@@ -154,37 +130,6 @@ async fn login(
         Err(err) => {
             tracing::warn!("phone login failed: {err:#}");
             failure(StatusCode::BAD_GATEWAY, "the TV could not type (is xdotool installed?)")
-        }
-    }
-}
-
-async fn press_key(
-    State(pairing): State<Pairing>,
-    Path(token): Path<String>,
-    Json(body): Json<KeyBody>,
-) -> Response {
-    let Some(pid) = pairing.check(&token).await else {
-        return failure(StatusCode::NOT_FOUND, "this sign-in link has expired");
-    };
-    let key = match body.key.as_str() {
-        "enter" => "Return",
-        "tab" => "Tab",
-        "backspace" => "BackSpace",
-        "shift-tab" => "shift+Tab",
-        _ => return failure(StatusCode::BAD_REQUEST, "unknown key"),
-    };
-    xdotool(pid, &["key", "--clearmodifiers", "--", key]).await
-}
-
-async fn xdotool(pid: Option<u32>, args: &[&str]) -> Response {
-    match send_keys(pid, args).await {
-        Ok(()) => Json(json!({"status": "ok"})).into_response(),
-        Err(err) => {
-            tracing::warn!("phone keyboard failed: {err:#}");
-            failure(
-                StatusCode::BAD_GATEWAY,
-                "the TV could not type (is xdotool installed?)",
-            )
         }
     }
 }

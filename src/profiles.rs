@@ -82,6 +82,51 @@ impl Runtime {
     }
 }
 
+/// True once the sign-in window has stored YouTube's login cookie. Firefox keeps the cookie
+/// database open, so read a copy of it and its write-ahead log instead of the live files.
+fn logged_in(folder: &Path) -> bool {
+    let check = || -> Result<bool> {
+        let copy = tempfile_dir()?;
+        for name in ["cookies.sqlite", "cookies.sqlite-wal"] {
+            let source = folder.join(name);
+            if source.exists() {
+                std::fs::copy(&source, copy.join(name))?;
+            }
+        }
+        let db = rusqlite::Connection::open_with_flags(
+            copy.join("cookies.sqlite"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        let found = db.query_row(
+            "SELECT COUNT(*) FROM moz_cookies WHERE name = 'LOGIN_INFO' AND host LIKE '%youtube.com'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let _ = std::fs::remove_dir_all(&copy);
+        Ok(found > 0)
+    };
+    check().unwrap_or(false)
+}
+
+fn tempfile_dir() -> Result<PathBuf> {
+    let path = std::env::temp_dir().join(format!("couchtube-cookies-{}", std::process::id()));
+    private_directory(&path)?;
+    Ok(path)
+}
+
+/// Ask Firefox to quit so it flushes its profile; kill it if it doesn't.
+async fn close_firefox(child: &mut tokio::process::Child) {
+    if let Some(pid) = child.id() {
+        let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).status().await;
+    }
+    if tokio::time::timeout(std::time::Duration::from_secs(10), child.wait())
+        .await
+        .is_err()
+    {
+        let _ = child.kill().await;
+    }
+}
+
 pub fn private_directory(path: &Path) -> Result<()> {
     std::fs::DirBuilder::new()
         .recursive(true)
@@ -182,11 +227,11 @@ impl Profiles {
     }
 
     pub async fn signin(&self, account: Account) -> Result<()> {
-        let folder = account.firefox.as_ref().context("Guest cannot sign in")?;
+        let folder = account.firefox.clone().context("Guest cannot sign in")?;
         std::fs::write(folder.join("user.js"), USER_JS)?;
         let mut child = Command::new("firefox")
             .args(["--new-instance", "--no-remote", "--profile"])
-            .arg(folder)
+            .arg(&folder)
             .arg(&self.signin_url)
             // X11 mode, so the phone keyboard can type into the window with xdotool.
             .env("MOZ_ENABLE_WAYLAND", "0")
@@ -203,16 +248,32 @@ impl Profiles {
             &account.profile.id,
             LoginStatus::new(
                 LoginState::SigningIn,
-                "Sign in in Firefox, then close the sign-in window",
+                "Sign in in Firefox. It closes by itself when you are signed in",
             ),
         )
         .await;
         let profiles = self.clone();
         tokio::spawn(async move {
-            let exit = child.wait().await;
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(2));
+            let mut seen = 0u32;
+            let exit = loop {
+                tokio::select! {
+                    exit = child.wait() => break exit.map(|status| status.success()),
+                    _ = ticker.tick() => {
+                        let path = folder.clone();
+                        let found = tokio::task::spawn_blocking(move || logged_in(&path)).await.unwrap_or(false);
+                        // Give Firefox a few more seconds to finish writing its cookies.
+                        seen = if found { seen + 1 } else { 0 };
+                        if seen >= 3 {
+                            close_firefox(&mut child).await;
+                            break Ok(true);
+                        }
+                    }
+                }
+            };
             profiles.pairing.end().await;
             match exit {
-                Ok(exit) if exit.success() => { profiles.check(account).await; }
+                Ok(true) => { profiles.check(account).await; }
                 _ => profiles.set_status(&account.profile.id, LoginStatus::new(LoginState::CheckFailed, "Firefox did not close normally. Open sign-in again or check the login.")).await,
             }
         });
@@ -290,6 +351,18 @@ pub fn valid_color(color: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn detects_the_youtube_login_cookie() {
+        let dir = std::env::temp_dir().join(format!("couchtube-test-{}", std::process::id()));
+        private_directory(&dir).unwrap();
+        let db = rusqlite::Connection::open(dir.join("cookies.sqlite")).unwrap();
+        db.execute("CREATE TABLE moz_cookies (name TEXT, host TEXT)", []).unwrap();
+        assert!(!logged_in(&dir));
+        db.execute("INSERT INTO moz_cookies VALUES ('LOGIN_INFO', '.youtube.com')", []).unwrap();
+        assert!(logged_in(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[tokio::test]
     async fn profiles_use_private_isolated_directories_and_guest_has_no_cookies() {
         let root = std::env::temp_dir().join(format!("ct-profiles-{}", std::process::id()));

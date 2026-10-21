@@ -76,22 +76,22 @@ Each account has its own Firefox folder; Guest never loads account cookies. A na
 
 The QR code opens a page on your phone that works as a keyboard for the Firefox sign-in window. It does not log in for you and does not use Bluetooth.
 
-How it works: while a sign-in window is open, the backend creates a random 128-bit token and shows `http://<server LAN address>:7879/p/<token>` as a QR code. The phone page sends your text to the backend, which types it into the Firefox window with `xdotool`. Closing the sign-in window ends the session and the link stops working.
+How it works: while a sign-in window is open, the backend creates a random 128-bit token and shows `http://<server LAN address>:7879/p/<token>` as a QR code. The phone page sends your email and password to the backend, which types them into the Firefox window with `xdotool`. Closing the sign-in window ends the session and the link stops working.
 
-Using it: scan the QR code and keep the phone page open. Press Enter on the TV to continue to Google so the email field is showing. On the phone, fill in the email and password (a password manager can do this) and tap **Sign in**. The TV types the email, presses Enter, waits 4 seconds for Google's password page, then types the password and presses Enter. Approve any 2-step prompt on your phone. Below the form are plain keyboard buttons (Type, Tab, Shift+Tab, Enter, Backspace) for anything else, such as a verification code.
+Using it: scan the QR code and keep the phone page open. Press Enter on the TV to continue to Google so the email field is showing. On the phone, fill in the email and password (a password manager can do this) and tap **Sign in**. The TV types the email, presses Enter, waits 4 seconds for Google's password page, then types the password and presses Enter. Approve any 2-step prompt on your phone. The phone page has no other keys; use the TV keyboard for anything else, such as a verification code.
 
 Safety:
 - **The password crosses your Wi-Fi unencrypted.** The phone page uses plain HTTP, so someone else on the same network could read what you type. Use it only on a network you trust, never on shared or guest Wi-Fi. HTTPS would need a certificate the phone trusts, so it isn't used.
 - **Port 7879 is the only part of CouchTube reachable from the network.** The main API stays on `127.0.0.1`. The pairing port answers only to the live token, with 404 for anything else, and the token is gone when the sign-in window closes. Anyone who sees the QR code or link while the window is open can type into it, so don't show the TV screen to people you don't trust during sign-in.
-- Typed text is never logged. It is passed to `xdotool` as an argument, not through a shell, and is limited to 256 characters per request.
+- Typed text is never logged. It is passed to `xdotool` as an argument, not through a shell, and each of the email and password is limited to 256 characters. The only route that types is the one-step sign-in.
 - Keep port 7879 closed to the internet. Do not forward it on your router.
 
 Limits:
 - Needs `xdotool`. If it is missing, the phone page shows "the TV could not type".
 - Firefox is started with `MOZ_ENABLE_WAYLAND=0` so that `xdotool` can reach it under XWayland. There is no equivalent that works on KDE's Wayland.
-- The one-tap sign-in is timed: if Google is slow, shows a captcha or an account chooser, or the email isn't focused, it can type into the wrong place. Use the keyboard buttons to finish by hand.
+- The one-tap sign-in is timed: if Google is slow, shows a captcha or an account chooser, or the email isn't focused, it can type into the wrong place. Finish by hand on the TV keyboard.
 - Some phone password managers refuse to fill on `http://` pages. If yours does, copy the password from it and paste it into the field.
-- The phone cannot see the TV screen. Click the right field on the TV, or use Tab and Shift+Tab, before typing.
+- The phone cannot see the TV screen, and it cannot click a field for you. The email field must already be focused on the TV.
 - If you run the backend as a systemd service, set `DISPLAY` for it, or `xdotool` cannot find the window.
 - The phone and the server must be on the same network. Guest networks and routers with client isolation block it.
 - If the server has a firewall, allow the port for your home network only, for example `sudo ufw allow from 192.168.50.0/24 to any port 7879 proto tcp`.
