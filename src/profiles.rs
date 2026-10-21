@@ -244,7 +244,7 @@ impl Profiles {
             .kill_on_drop(true)
             .spawn()
             .context("could not open Firefox")?;
-        if let Err(err) = self.pairing.start(child.id()).await {
+        if let Err(err) = self.pairing.attach(child.id()).await {
             tracing::warn!("phone pairing unavailable: {err:#}");
         }
         self.set_status(

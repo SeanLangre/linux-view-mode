@@ -85,6 +85,7 @@ export default function ProfileGate() {
   }
 
   const choose = (profile: api.Profile) => perform(async () => {
+    void api.cancelPairing()
     await api.selectProfile(profile.id)
     api.setProfileScope(profile.id)
     setActive(profile)
@@ -99,6 +100,7 @@ export default function ProfileGate() {
   function back() {
     if (busy) return
     setError(null)
+    if (!loginBusy) { void api.cancelPairing(); setQr(null) }
     setView({ kind: 'list' })
   }
 
@@ -157,15 +159,15 @@ export default function ProfileGate() {
       </>}
       {view.kind === 'add' && <>
         <h1 className="page-title">Add a profile</h1>
-        <p className="status">Give it a name, then sign in to YouTube in its own Firefox window.</p>
+        <p className="status">Give it a name. You can then scan a QR code to sign in from your phone before opening its own Firefox window.</p>
         <form className="profile-form" onSubmit={(event) => {
           event.preventDefault()
           void perform(async () => {
             const profile = await api.createProfile(name, color)
             await refresh()
             setView({ kind: 'manage', profile })
-            const status = await api.signin(profile.id)
-            setStatuses((current) => ({ ...current, [profile.id]: status }))
+            // Show the phone QR code now; Firefox opens only when asked.
+            setQr(await api.startPairing().catch(() => null))
           })
         }}>
           <label>Name<input className="search-box" value={name} maxLength={40} required disabled={busy}
@@ -180,16 +182,19 @@ export default function ProfileGate() {
       {view.kind === 'manage' && <>
         <h1 className="page-title">Connect {view.profile.name} to YouTube</h1>
         <p className="status" role="status">{login?.message ?? 'Getting sign-in status…'}</p>
-        <p className="status">Complete sign-in in the Firefox window, then close that window with Alt+F4. CouchTube will check the login.</p>
+        <p className="status">{signingIn
+          ? 'Complete sign-in in the Firefox window. It closes by itself once you are signed in, then CouchTube checks the login.'
+          : 'Choose Open Firefox sign-in when you are ready. It closes by itself once you are signed in, then CouchTube checks the login.'}</p>
         {qr && <div className="pairing">
-          <img alt="QR code" width={240} height={240} src={`data:image/svg+xml;utf8,${encodeURIComponent(qr.svg)}`} />
+          <img alt="QR code for the phone sign-in link, which is also written below" width={240} height={240} src={`data:image/svg+xml;utf8,${encodeURIComponent(qr.svg)}`} />
           <p className="status">Scan with your phone (same Wi-Fi) to type your email and password there instead of on the TV keyboard.</p>
+          <p className="status">{qr.url}</p>
         </div>}
         <div className="profile-actions">
           <button data-nav disabled={busy || loginBusy} onClick={() => void choose(view.profile)}>
             {login?.state === 'signed_in' ? 'Continue to CouchTube' : 'Continue without verified sign-in'}
           </button>
-          <button data-nav disabled={busy || loginBusy} onClick={() => void openSignin(view.profile)}>Open sign-in again</button>
+          <button data-nav disabled={busy || loginBusy} onClick={() => void openSignin(view.profile)}>{signingIn ? 'Open sign-in again' : 'Open Firefox sign-in'}</button>
           <button data-nav disabled={busy || loginBusy} onClick={() => void perform(async () => {
             const status = await api.loginStatus(view.profile.id, true)
             setStatuses((current) => ({ ...current, [view.profile.id]: status }))

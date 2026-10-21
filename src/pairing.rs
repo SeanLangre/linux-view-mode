@@ -21,6 +21,8 @@ use tokio::{
 
 const MAX_TEXT: usize = 256;
 const MAX_CODES: u8 = 3;
+/// A session started before Firefox opens expires if the sign-in window never does.
+const IDLE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 const PAGE: &str = include_str!("pairing.html");
 
 #[derive(Clone, Copy, PartialEq)]
@@ -89,7 +91,39 @@ impl Pairing {
             codes_sent: 0,
             server,
         });
+        drop(session);
+        if pid.is_none() {
+            let pairing = self.clone();
+            let expected = self.session.lock().await.as_ref().map(|s| s.token.clone());
+            tokio::spawn(async move {
+                tokio::time::sleep(IDLE_LIFETIME).await;
+                let mut session = pairing.session.lock().await;
+                if session.as_ref().is_some_and(|s| s.pid.is_none() && Some(&s.token) == expected.as_ref()) {
+                    *session = None;
+                }
+            });
+        }
         Ok(())
+    }
+
+    /// Tie the session to the sign-in window once it opens; starts one if none is waiting.
+    pub async fn attach(&self, pid: Option<u32>) -> Result<()> {
+        if let Some(session) = self.session.lock().await.as_mut() {
+            // Asking again for a waiting session must not detach an open window.
+            if pid.is_some() {
+                session.pid = pid;
+            }
+            return Ok(());
+        }
+        self.start(pid).await
+    }
+
+    /// End a session that is still waiting for its window (a window that is open keeps it).
+    pub async fn cancel(&self) {
+        let mut session = self.session.lock().await;
+        if session.as_ref().is_some_and(|s| s.pid.is_none()) {
+            *session = None;
+        }
     }
 
     /// End the session and close the LAN port.
@@ -203,6 +237,13 @@ async fn send(
         Ok(pid) => pid,
         Err(response) => return response,
     };
+    if pid.is_none() {
+        pairing.release(&token, step).await;
+        return failure(
+            StatusCode::TOO_EARLY,
+            "the sign-in window isn't open yet: press Open Firefox sign-in on the TV, then try again",
+        );
+    }
     match type_and_enter(pid, &text).await {
         Ok(()) => Json(json!({"status": "ok"})).into_response(),
         Err(err) => {

@@ -65,7 +65,7 @@ and open `http://127.0.0.1:5173`. Vite forwards `/api` calls to the backend.
 
 ## Profiles and sign-in
 
-1. On **Who’s watching?**, choose **Add profile**, enter a name and choose a colour, then press **Create and sign in**.
+1. On **Who’s watching?**, choose **Add profile**, enter a name and choose a colour, then press **Create and sign in**. A QR code for your phone appears first; Firefox opens only when you choose **Open Firefox sign-in**.
 2. The separate Firefox window opens on a page with a QR code. Scan it with your phone (see below), then press **Enter** to continue to Google. Sign in with the TV keyboard or the phone and complete any verification. The window closes by itself a few seconds after YouTube's login cookie appears; to give up, close it with **Alt+F4**.
 3. Wait for **YouTube sign-in works**, then choose **Continue to CouchTube**. A failed check can mean a connection or yt-dlp problem; use **Check sign-in** or **Open sign-in again** to retry.
 4. Press **P** while browsing to switch profiles. On the picker, highlight a named profile and press **S** to reopen sign-in or **D** to remove it (with confirmation).
@@ -74,15 +74,15 @@ Each account has its own Firefox folder; Guest never loads account cookies. A na
 
 ### Signing in from your phone
 
-The QR code opens a page on your phone that works as a keyboard for the Firefox sign-in window. It does not log in for you and does not use Bluetooth.
+The QR code (shown in the CouchTube window) opens a page on your phone that works as a keyboard for the Firefox sign-in window. It does not log in for you and does not use Bluetooth.
 
-How it works: while a sign-in window is open, the backend opens port 7879, creates a random 128-bit token and shows `http://<server LAN address>:7879/p/<token>` as a QR code (and as text under it). The phone page sends text to the backend, which types it into the Firefox window with `xdotool`. Closing the sign-in window ends the session, closes the port, and the link stops working.
+How it works: from when you create the profile (or open sign-in) until the sign-in window closes, the backend opens port 7879, creates a random 128-bit token and shows `http://<server LAN address>:7879/p/<token>` as a QR code (and as text under it). The phone page sends text to the backend, which types it into the Firefox window with `xdotool`. Closing the sign-in window ends the session, closes the port, and the link stops working.
 
 Using it: scan the QR code (or type the link) and keep the phone page open. Press Enter on the TV to continue to Google so the email field is showing. On the phone, do the steps in order: **1. Email** (typed, then Enter), then once the TV shows the password page, **2. Password** (typed, then Enter, so a password manager can fill it), then **3. 2-step code** if Google asks. Approve any 2-step prompt on your phone. Use the TV keyboard for anything else.
 
 Safety:
 - **The password crosses your Wi-Fi unencrypted.** The phone page uses plain HTTP, so someone else on the same network could read what you type. Use it only on a network you trust, never on shared or guest Wi-Fi. HTTPS would need a certificate the phone trusts, so it isn't used; an encrypted form is planned.
-- **Port 7879 is the only part of CouchTube reachable from the network, and only while a sign-in window is open.** The main API stays on `127.0.0.1` and rejects requests with any other `Host`. The pairing port answers only to the live token, with 404 for anything else. Anyone who sees the QR code or link while the window is open can type into it, so don't show the TV screen to people you don't trust during sign-in.
+- **Port 7879 is the only part of CouchTube reachable from the network, and only while a sign-in is in progress.** If you never open Firefox, the link expires after 15 minutes or when you leave the screen. The main API stays on `127.0.0.1` and rejects requests with any other `Host`. The pairing port answers only to the live token, with 404 for anything else. Anyone who sees the QR code or link while the window is open can type into it, so don't show the TV screen to people you don't trust during sign-in.
 - Typed text is never logged. It is sent to `xdotool` on stdin (not visible in `ps`) without a shell, and is limited to 256 characters on one line.
 - Typing fails closed: if the sign-in window can't be found or doesn't take focus, nothing is typed.
 - Email and password can each be sent once per sign-in; the code up to 3 times. After that the phone page says to use the TV keyboard.
@@ -157,7 +157,7 @@ If it happens again, note the video ID, whether the picture freezes or breaks up
 | DELETE | `/api/profiles/<id>` | Removes the profile and its local sign-in files |
 | POST | `/api/profiles/<id>/select` | Selects a profile and stops playback |
 | POST | `/api/profiles/<id>/signin` | Opens that profile’s Firefox sign-in window |
-| GET | `/api/pairing` | Phone URL and QR code (SVG) while a sign-in window is open, otherwise 404 |
+| GET/POST/DELETE | `/api/pairing` | Phone URL and QR code (SVG) while a sign-in is in progress, otherwise 404; POST starts it before Firefox opens, DELETE cancels it if no window is open |
 | GET | `/api/profiles/<id>/status` | `{state, message}`; `?check=true` starts a login check |
 | GET | `/api/health` | `{"status":"ok"}` |
 | GET | `/api/feed/<kind>` | Video list: `continue`, `recommended`, `subscriptions`, `history`, `watchlater`, `liked`; `?refresh=true` bypasses the feed cache |

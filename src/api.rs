@@ -39,7 +39,7 @@ pub fn router(state: AppState) -> Router {
         .route("/profiles/{id}/select", post(select_profile))
         .route("/profiles/{id}/signin", post(signin))
         .route("/profiles/{id}/status", get(login_status))
-        .route("/pairing", get(pairing))
+        .route("/pairing", get(pairing).post(start_pairing).delete(cancel_pairing))
         .route("/play", post(play))
         .route("/stop", post(stop))
         .route("/status", get(status))
@@ -357,6 +357,22 @@ async fn signin(
         )
     })?;
     Ok(Json(state.profiles.login_status(&id).await))
+}
+
+/// Start the phone link before Firefox opens, so the QR code can be scanned first.
+async fn start_pairing(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    state
+        .profiles
+        .pairing
+        .attach(None)
+        .await
+        .map_err(internal)?;
+    pairing(State(state)).await
+}
+
+async fn cancel_pairing(State(state): State<AppState>) -> Json<serde_json::Value> {
+    state.profiles.pairing.cancel().await;
+    Json(json!({"status": "ok"}))
 }
 
 async fn pairing(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {

@@ -7,6 +7,6 @@ export default defineConfig({
   server: {
     host: '127.0.0.1',
     // The Rust backend (`cargo run` in the repo root).
-    proxy: { '/api': 'http://127.0.0.1:7878' },
+    proxy: { '/api': { target: 'http://127.0.0.1:7878', changeOrigin: true } },
   },
 })
