@@ -12,7 +12,7 @@
   #msg { min-height: 1.5em; color: #f99; }
 </style>
 <h1>Sign in on the TV</h1>
-<p>Do each step when the TV shows the matching page. Each step can be sent once; use the TV keyboard for anything else.</p>
+<p>Do each step when the TV shows the matching page. If you mistype, you can send a step up to 3 times; after that use the TV keyboard.</p>
 <p id="msg" role="status"></p>
 
 <form id="email-form" class="step" data-step="email">
@@ -60,7 +60,7 @@
         })
         if (res.ok) {
           input.value = ''
-          if (form.dataset.step === 'code') button.disabled = false
+          button.disabled = false
           say('Sent step ' + form.dataset.step + '. Check the TV.', true)
         } else {
           button.disabled = res.status === 409

@@ -1,27 +1,29 @@
 # TODO
 
-Checklist for [`plan.md`](plan.md). Tick items as they're done.
+Checklist for [`plan.md`](plan.md). Tick items as they're done; move finished sections to **Done** at the bottom.
 
 ## Now
 
-- [x] Phase 2 committed (`097bc9e`)
-- [x] Phase 3 committed (`9c21fe8`); user reported playback looked good
-- [x] Phase 4 committed (`6d11404`); user reported the profile/sign-in flow worked well
-- [x] Implement Phase 5 account feeds, progress/history and queue
 - [ ] Test personal feeds, resume, queue and YouTube watched-history sync with a real account
 - [ ] Phone keyboard: user said it "kind of worked"; find out what fell short (backend log line `phone typing failed`)
 - [ ] Run `deploy/install.sh` on the dev machine or server and confirm the kiosk restarts after killing Firefox
 
-## Phase 3 — Playback (implemented; user test positive, focus follow-up pending)
+## Sign-in follow-ups (second review, 2026-10-21)
 
-- [x] `src/player.rs`: start mpv fullscreen (`--hwdec=vaapi`, 1080p cap, IPC socket), one player at a time, kill on stop
-- [x] Read `time-pos` / `duration` over the mpv IPC socket
-- [x] `config/mpv/input.conf`: Esc and `q` quit, arrow seeks, `i` overlay
-- [x] `config/mpv/mpv.conf`: format cap, hwdec, OSD size readable from the couch
-- [x] SponsorBlock mpv script
-- [x] API: `POST /api/play {id, start?}`, `POST /api/stop`, `GET /api/status`
-- [x] UI: Enter calls `/api/play`; show "Playing: <title>" while mpv runs; return to the same card afterwards
-- [ ] Check on the dev machine (KDE Wayland): mpv opens above the Firefox kiosk and focus returns when it quits; add a KWin rule if not
+- [ ] Encrypt the phone form against passive Wi-Fi sniffing: one-time key in the QR URL `#fragment`, inline crypto (e.g. tweetnacl; no WebCrypto on plain HTTP). Remaining main risk
+- [ ] (Accepted, low) `type_and_enter`: the second focus check only guards Enter; if focus moves mid-typing (up to ~3 s for 256 characters) the text already went elsewhere
+
+## Testing still to record
+
+- [ ] Phase 3: on the dev machine (KDE Wayland), mpv opens above the Firefox kiosk and focus returns when it quits; add a KWin rule if not
+- [ ] Phase 4: sign in two real accounts, check YouTube accepts both logins, and switch with `p`
+- [ ] Phase 5: confirm Recommended/Subscriptions/History/Watch Later/Liked with a real account
+- [ ] Phase 5: watch for at least 35 seconds and confirm the video appears in YouTube history
+- [ ] Phase 5: stop and resume a video; check the same position and queue after a backend restart
+
+## Phase 6 — Deploy and appliance mode
+
+- [ ] KDE auto-login; no screen lock, blanking or sleep (manual Plasma settings, documented in the README)
 
 ## Server setup (whenever ready, on the RN96)
 
@@ -38,60 +40,6 @@ Checklist for [`plan.md`](plan.md). Tick items as they're done.
 - [ ] `--mark-watched` shows up in YouTube history
 - [ ] Login still works after 2–3 days
 
-## Phase 4 — Profiles and sign-in (implemented; user test positive)
-
-- [x] SQLite (`rusqlite`) + `db.rs`
-- [x] "Who's watching?" screen, add/remove profile, Guest
-- [x] Firefox profile per account, sign-in window, login check
-- [x] yt-dlp and mpv use the active profile's cookies
-- [x] `p` switches profile
-
-- [x] Try the profile/sign-in flow with a real account (user report, 2026-10-20)
-- [ ] Explicitly verify two real accounts: sign in two real accounts, check YouTube accepts both logins, and switch with `p`
-
-## Sign-in review (2026-10-21)
-
-Safety:
-
-- [x] `pairing.rs` `send_keys`: fail closed when the Firefox window isn't found (no typing into whatever is focused, e.g. a terminal); pass `--window <id>` to `type`/`key`
-- [x] Replace the fixed 4 s email→password delay: two phone steps ("Type email", then "Password page is showing") or check the window title first, so the password can't land in the email field and show on the TV
-- [x] Send typed text to `xdotool type --file -` on stdin instead of argv (argv is readable via `ps`/`/proc/<pid>/cmdline`); fix the README claim
-- [ ] Encrypt the phone form against passive Wi-Fi sniffing: one-time key in the QR URL `#fragment`, inline crypto (e.g. tweetnacl; no WebCrypto on http)
-- [x] Make the pairing token single-use: end the session after a successful `/login`
-- [x] Only listen on port 7879 while a sign-in window is open
-- [x] Main API: reject requests whose `Host` isn't `127.0.0.1:<port>`/`localhost:<port>` (DNS rebinding could read `/api/pairing` or delete profiles)
-- [x] `profiles.rs` `logged_in()`: remove the temporary cookie copy on every path, including errors
-
-Accessibility:
-
-- [x] `signin.html`: show the pairing URL as text under the QR code (no camera / screen readers); better alt text
-- [x] Phone page: way to type a 2-step code (type + Enter only, single-use, into the found window) instead of requiring the TV keyboard
-- [x] `pairing.html`: real `<label>`s instead of placeholder-only inputs; `aria-describedby` for errors
-- [x] `lang="en"` on `pairing.html` and `signin.html`
-- [x] `pairing.html`: catch `fetch` failures (button stays disabled, no message); show "Couldn't reach the TV — same Wi-Fi?"
-- [x] README: sign-in step 2 still says close with Alt+F4, but the window now closes by itself
-- [x] README and plan: document current weaknesses honestly (argv, reusable link, wrong-window typing, timed step) and the pairing design
-- [x] After each fix above, remove the matching weakness from README "Signing in from your phone" and plan.md
-
-## Phase 5 — Account feeds (implemented; real-account check pending)
-
-- [x] Home rows: Continue watching, Recommended, Subscriptions (replace the placeholder Music/Nature/Science rows)
-- [x] Screens: History, Watch Later, Liked
-- [x] Mark watched after ~30 s; resume positions; queue (`a`, `n`)
-- [x] Per-profile cache and prefetch
-
-- [ ] Confirm recommendations/subscriptions/history/Watch Later/Liked with a real account
-- [ ] Watch for at least 35 seconds and confirm the video appears in YouTube history
-- [ ] Stop and resume a video; check the same position and queue after a backend restart
-
-## Phase 6 — Deploy and appliance mode
-
-- [x] `deploy/install.sh` (written and syntax-checked; not yet run on the server)
-- [x] systemd user units: backend, kiosk, daily cookie refresh (`deploy/`; the refresh re-runs each profile's sign-in check)
-- [x] Deploy the supplied `config/firefox/policies.json` (uBlock Origin + SponsorBlock) via `install.sh`; `user.js` is already copied into account profiles
-- [ ] KDE auto-login; no screen lock, blanking or sleep (manual Plasma settings, documented in the README)
-- [x] "Exit to desktop" (Home menu, `POST /api/system/exit`) and a `couchtube-kiosk.desktop` launcher to bind a KDE shortcut to
-
 ## Phase 7 — Polish
 
 - [ ] YouTube TV fallback tile (Firefox + uBlock Origin)
@@ -99,9 +47,20 @@ Accessibility:
 - [ ] HDMI-CEC power control
 - [ ] Phone remote (with authentication)
 
-## Known issues / small fixes
+## Known issues
 
-- [x] Keep Home focus on the original video after the first search (recent searches now follow the stable video rows; browser regression test passes)
-- [x] `/api/search?limit=abc` returns a plain-text error instead of `{"error": ...}`
-- [x] Replace the three placeholder Home searches with Continue watching, Recommended and Subscriptions
 - [ ] Follow up on the reported mpv warnings: `client removed during hook handling`, `Packet corrupt`, `Invalid OBU length`, and `Failed to parse temporal unit`. The log confirms AV1 1080p59.94 playback with VA-API; whether playback visibly failed or the user quit at ~20 s is not confirmed. Record the video ID and reproduction steps if it recurs.
+
+## Done
+
+- **Phases 1–2** (`097bc9e`): backend skeleton, TV interface.
+- **Phase 3 — Playback** (`9c21fe8`; user reported playback looked good): mpv fullscreen with VA-API and 1080p cap, IPC position/duration, `input.conf`/`mpv.conf`, SponsorBlock script, `/api/play`/`stop`/`status`, return to the same card.
+- **Phase 4 — Profiles and sign-in** (`6d11404`; user reported the real flow worked, 2026-10-20): SQLite profiles, "Who's watching?", Guest, Firefox profile per account, login check, per-profile cookies for yt-dlp and mpv, `p` to switch.
+- **Phase 5 — Account feeds**: Home rows (Continue watching, Recommended, Subscriptions), History/Watch Later/Liked, mark watched after ~30 s, resume, queue (`a`, `n`), per-profile cache and prefetch.
+- **Phase 6 — Deploy** (not yet run on the server): `deploy/install.sh`, systemd user units (backend, kiosk, daily cookie refresh), Firefox `policies.json` via `install.sh`, "Exit to desktop" + `couchtube-kiosk.desktop` launcher.
+- **Sign-in review 1 (2026-10-21)**:
+  - Safety: typing fails closed unless the sign-in window is found and focused (no `--window`: Firefox ignores those synthetic events), separate email/password/code steps instead of the 4 s timer, text sent to `xdotool` on stdin, single-use steps, port 7879 open only during sign-in, `Host` check on the main API, cookie temp copy always removed.
+  - Accessibility: URL shown as text under the QR code with better alt text, phone 2-step code field, real labels and `aria-describedby`, `lang="en"`, network-failure message.
+  - README and plan updated to match.
+- **Sign-in review 2 (2026-10-21)**: `signin.html` shows the QR code and URL; phone steps allow 3 tries; README limits order fixed.
+- **Small fixes**: Home focus stays on the original video after the first search; `/api/search?limit=abc` returns JSON errors; placeholder Home searches replaced.

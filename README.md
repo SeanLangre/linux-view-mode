@@ -85,7 +85,7 @@ Safety:
 - **Port 7879 is the only part of CouchTube reachable from the network, and only while a sign-in is in progress.** If you never open Firefox, the link expires after 15 minutes or when you leave the screen. The main API stays on `127.0.0.1` and rejects requests with any other `Host`. The pairing port answers only to the live token, with 404 for anything else. Anyone who sees the QR code or link while the window is open can type into it, so don't show the TV screen to people you don't trust during sign-in.
 - Typed text is never logged. It is sent to `xdotool` on stdin (not visible in `ps`) without a shell, and is limited to 256 characters on one line.
 - Typing fails closed: if the sign-in window can't be found or doesn't take focus, nothing is typed.
-- Email and password can each be sent once per sign-in; the code up to 3 times. After that the phone page says to use the TV keyboard.
+- Each of email, password and code can be sent up to 3 times per sign-in (so a typo can be fixed). After that the phone page says to use the TV keyboard.
 - Keep port 7879 closed to the internet. Do not forward it on your router.
 
 Limits:
@@ -93,14 +93,14 @@ Limits:
 - Firefox is started with `MOZ_ENABLE_WAYLAND=0` so that `xdotool` can reach it under XWayland. There is no equivalent that works on KDE's Wayland.
 - Some phone password managers refuse to fill on `http://` pages. If yours does, copy the password from it and paste it into the field.
 - You choose when to send the password: if you tap it while the email page is still showing, it is typed into the email field and can appear on the TV screen. Wait for the password page.
-
-These weaknesses and the planned fixes are tracked under **Sign-in review** in [`TODO.md`](TODO.md).
 - The phone cannot see the TV screen, and it cannot click a field for you. The email field must already be focused on the TV.
 - If you run the backend as a systemd service, set `DISPLAY` for it, or `xdotool` cannot find the window.
 - The phone and the server must be on the same network. Guest networks and routers with client isolation block it.
 - If the server has a firewall, allow the port for your home network only, for example `sudo ufw allow from 192.168.50.0/24 to any port 7879 proto tcp`.
 - The address in the QR code is the one the OS uses to reach the outside. With a VPN or several network cards it may be the wrong one.
 - Phones may ask for "Local network" or "Nearby devices" permission in the browser. Allow it so the page can load.
+
+These weaknesses and the planned fixes are tracked under **Sign-in review** in [`TODO.md`](TODO.md).
 
 The sign-in check requests one item from the account’s subscriptions. Home shows **Continue watching**, **Recommended**, and **Subscriptions**. The Home menu opens **History**, **Watch later**, **Liked**, and **Queue**. Guest and profiles without cookies have local watch history and can search, queue and resume videos; account feeds stay empty until sign-in. Daily cookie refresh is planned for deployment.
 

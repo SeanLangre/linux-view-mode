@@ -7,10 +7,24 @@
   body { font: 28px system-ui, sans-serif; background: #111; color: #eee; text-align: center; padding: 3rem 1rem; }
   a { display: inline-block; margin-top: 2rem; padding: 1rem 2rem; background: #6288d9; color: #fff; border-radius: 12px; text-decoration: none; }
   a:focus { outline: 4px solid #fff; }
+  img { width: 260px; height: 260px; background: #fff; border-radius: 8px; }
   p { max-width: 36em; margin: 1rem auto; color: #bbb; }
 </style>
 <h1>Sign in to YouTube</h1>
-<p>To type on your phone, use the QR code in the CouchTube window. Otherwise continue to Google and use the TV keyboard.</p>
+<div id="phone" hidden>
+  <p>To type on your phone, scan this QR code, or open the link below.</p>
+  <img id="qr" alt="QR code for the phone sign-in page">
+  <p id="url"></p>
+</div>
+<p>Otherwise continue to Google and use the TV keyboard.</p>
 <a id="go" href="https://accounts.google.com/ServiceLogin?continue=https://www.youtube.com" autofocus>Continue to Google sign-in</a>
 <p>Press Enter to continue.</p>
-<script>document.getElementById('go').focus()</script>
+<script>
+  document.getElementById('go').focus()
+  fetch('/api/pairing').then((r) => r.ok ? r.json() : null).then((info) => {
+    if (!info) return
+    document.getElementById('qr').src = 'data:image/svg+xml,' + encodeURIComponent(info.svg)
+    document.getElementById('url').textContent = info.url
+    document.getElementById('phone').hidden = false
+  }).catch(() => {})
+</script>

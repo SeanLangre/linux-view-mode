@@ -20,25 +20,24 @@ use tokio::{
 };
 
 const MAX_TEXT: usize = 256;
-const MAX_CODES: u8 = 3;
+/// Each step can be typed this many times, so one typo doesn't force the TV keyboard.
+const MAX_TRIES: u8 = 3;
 /// A session started before Firefox opens expires if the sign-in window never does.
 const IDLE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 const PAGE: &str = include_str!("pairing.html");
 
 #[derive(Clone, Copy, PartialEq)]
 enum Step {
-    Email,
-    Password,
-    Code,
+    Email = 0,
+    Password = 1,
+    Code = 2,
 }
 
 struct Session {
     token: String,
     pid: Option<u32>,
     port: u16,
-    email_sent: bool,
-    password_sent: bool,
-    codes_sent: u8,
+    tries: [u8; 3],
     server: JoinHandle<()>,
 }
 
@@ -86,9 +85,7 @@ impl Pairing {
             token,
             pid,
             port,
-            email_sent: false,
-            password_sent: false,
-            codes_sent: 0,
+            tries: [0; 3],
             server,
         });
         drop(session);
@@ -162,29 +159,19 @@ impl Pairing {
         let Some(session) = guard.as_mut().filter(|s| s.token == token) else {
             return Err(failure(StatusCode::NOT_FOUND, "this sign-in link has expired"));
         };
-        let used = match step {
-            Step::Email => &mut session.email_sent,
-            Step::Password => &mut session.password_sent,
-            Step::Code if session.codes_sent < MAX_CODES => {
-                session.codes_sent += 1;
-                return Ok(session.pid);
-            }
-            Step::Code => return Err(failure(StatusCode::CONFLICT, "too many codes sent; use the TV keyboard")),
-        };
-        if std::mem::replace(used, true) {
-            return Err(failure(StatusCode::CONFLICT, "already sent; use the TV keyboard"));
+        let tries = &mut session.tries[step as usize];
+        if *tries >= MAX_TRIES {
+            return Err(failure(StatusCode::CONFLICT, "too many tries; use the TV keyboard"));
         }
+        *tries += 1;
         Ok(session.pid)
     }
 
     /// Give a step back after typing failed, so the phone can try again.
     async fn release(&self, token: &str, step: Step) {
         if let Some(session) = self.session.lock().await.as_mut().filter(|s| s.token == token) {
-            match step {
-                Step::Email => session.email_sent = false,
-                Step::Password => session.password_sent = false,
-                Step::Code => session.codes_sent = session.codes_sent.saturating_sub(1),
-            }
+            let tries = &mut session.tries[step as usize];
+            *tries = tries.saturating_sub(1);
         }
     }
 
@@ -334,20 +321,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn steps_are_single_use_and_can_be_given_back() {
+    async fn steps_are_limited_and_can_be_given_back() {
         let pairing = Pairing::new(0);
         pairing.start(Some(1)).await.unwrap();
         let token = pairing.session.lock().await.as_ref().unwrap().token.clone();
-        assert!(pairing.claim(&token, Step::Email).await.is_ok());
-        assert!(pairing.claim(&token, Step::Email).await.is_err());
-        pairing.release(&token, Step::Email).await;
-        assert!(pairing.claim(&token, Step::Email).await.is_ok());
-        assert!(pairing.claim(&token, Step::Password).await.is_ok());
-        assert!(pairing.claim(&token, Step::Password).await.is_err());
-        for _ in 0..MAX_CODES {
-            assert!(pairing.claim(&token, Step::Code).await.is_ok());
+        for step in [Step::Email, Step::Password, Step::Code] {
+            for _ in 0..MAX_TRIES {
+                assert!(pairing.claim(&token, step).await.is_ok());
+            }
+            assert!(pairing.claim(&token, step).await.is_err());
+            pairing.release(&token, step).await;
+            assert!(pairing.claim(&token, step).await.is_ok());
         }
-        assert!(pairing.claim(&token, Step::Code).await.is_err());
         assert!(pairing.claim("wrong", Step::Email).await.is_err());
     }
 
