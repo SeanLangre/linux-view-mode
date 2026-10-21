@@ -127,17 +127,23 @@ impl Pairing {
         });
         drop(session);
         if pid.is_none() {
-            let pairing = self.clone();
-            let expected = self.session.lock().await.as_ref().map(|s| s.token.clone());
-            tokio::spawn(async move {
-                tokio::time::sleep(IDLE_LIFETIME).await;
-                let mut session = pairing.session.lock().await;
-                if session.as_ref().is_some_and(|s| s.pid.is_none() && Some(&s.token) == expected.as_ref()) {
-                    *session = None;
-                }
-            });
+            self.expire_later().await;
         }
         Ok(())
+    }
+
+    /// End a session that is still waiting for its window if that never opens. It acts only on
+    /// the token it saw, so a later start or reset gets its own timer.
+    async fn expire_later(&self) {
+        let pairing = self.clone();
+        let expected = self.session.lock().await.as_ref().map(|s| s.token.clone());
+        tokio::spawn(async move {
+            tokio::time::sleep(IDLE_LIFETIME).await;
+            let mut session = pairing.session.lock().await;
+            if session.as_ref().is_some_and(|s| s.pid.is_none() && Some(&s.token) == expected.as_ref()) {
+                *session = None;
+            }
+        });
     }
 
     /// Tie the session to the sign-in window once it opens; starts one if none is waiting.
@@ -169,11 +175,17 @@ impl Pairing {
     pub async fn reset(&self) -> Result<()> {
         let token = hex(&random_bytes::<16>().await?);
         let key = random_bytes::<32>().await?;
-        if let Some(session) = self.session.lock().await.as_mut() {
+        let waiting = {
+            let mut guard = self.session.lock().await;
+            let Some(session) = guard.as_mut() else { return Ok(()) };
             session.token = token;
             session.key = key;
             session.phone = None;
             session.tries = [0; 3];
+            session.pid.is_none()
+        };
+        if waiting {
+            self.expire_later().await;
         }
         Ok(())
     }
