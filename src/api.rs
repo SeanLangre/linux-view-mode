@@ -2,7 +2,7 @@
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, State, rejection::JsonRejection},
+    extract::{Path, Query, State, rejection::{JsonRejection, QueryRejection}},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -54,6 +54,25 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// Reject requests whose `Host` isn't this server on loopback, so a web page can't reach the API
+/// through DNS rebinding.
+pub async fn require_local_host(
+    State(port): State<u16>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let host = request
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok());
+    let allowed = [format!("127.0.0.1:{port}"), format!("localhost:{port}")];
+    if host.is_some_and(|host| allowed.iter().any(|a| a.eq_ignore_ascii_case(host))) {
+        next.run(request).await
+    } else {
+        ApiError::new(StatusCode::FORBIDDEN, "unexpected Host header").into_response()
+    }
+}
+
 async fn health() -> Json<serde_json::Value> {
     Json(json!({ "status": "ok" }))
 }
@@ -67,8 +86,10 @@ struct SearchParams {
 
 async fn search(
     State(state): State<AppState>,
-    Query(params): Query<SearchParams>,
+    params: Result<Query<SearchParams>, QueryRejection>,
 ) -> Result<Json<Vec<Video>>, ApiError> {
+    let Query(params) = params
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "limit must be a positive whole number"))?;
     let query = ytdlp::clean_query(&params.q)
         .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "empty search query"))?;
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);

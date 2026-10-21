@@ -51,25 +51,25 @@ Checklist for [`plan.md`](plan.md). Tick items as they're done.
 
 Safety:
 
-- [ ] `pairing.rs` `send_keys`: fail closed when the Firefox window isn't found (no typing into whatever is focused, e.g. a terminal); pass `--window <id>` to `type`/`key`
-- [ ] Replace the fixed 4 s email→password delay: two phone steps ("Type email", then "Password page is showing") or check the window title first, so the password can't land in the email field and show on the TV
-- [ ] Send typed text to `xdotool type --file -` on stdin instead of argv (argv is readable via `ps`/`/proc/<pid>/cmdline`); fix the README claim
+- [x] `pairing.rs` `send_keys`: fail closed when the Firefox window isn't found (no typing into whatever is focused, e.g. a terminal); pass `--window <id>` to `type`/`key`
+- [x] Replace the fixed 4 s email→password delay: two phone steps ("Type email", then "Password page is showing") or check the window title first, so the password can't land in the email field and show on the TV
+- [x] Send typed text to `xdotool type --file -` on stdin instead of argv (argv is readable via `ps`/`/proc/<pid>/cmdline`); fix the README claim
 - [ ] Encrypt the phone form against passive Wi-Fi sniffing: one-time key in the QR URL `#fragment`, inline crypto (e.g. tweetnacl; no WebCrypto on http)
-- [ ] Make the pairing token single-use: end the session after a successful `/login`
-- [ ] Only listen on port 7879 while a sign-in window is open
-- [ ] Main API: reject requests whose `Host` isn't `127.0.0.1:<port>`/`localhost:<port>` (DNS rebinding could read `/api/pairing` or delete profiles)
-- [ ] `profiles.rs` `logged_in()`: remove the temporary cookie copy on every path, including errors
+- [x] Make the pairing token single-use: end the session after a successful `/login`
+- [x] Only listen on port 7879 while a sign-in window is open
+- [x] Main API: reject requests whose `Host` isn't `127.0.0.1:<port>`/`localhost:<port>` (DNS rebinding could read `/api/pairing` or delete profiles)
+- [x] `profiles.rs` `logged_in()`: remove the temporary cookie copy on every path, including errors
 
 Accessibility:
 
-- [ ] `signin.html`: show the pairing URL as text under the QR code (no camera / screen readers); better alt text
-- [ ] Phone page: way to type a 2-step code (type + Enter only, single-use, into the found window) instead of requiring the TV keyboard
-- [ ] `pairing.html`: real `<label>`s instead of placeholder-only inputs; `aria-describedby` for errors
-- [ ] `lang="en"` on `pairing.html` and `signin.html`
-- [ ] `pairing.html`: catch `fetch` failures (button stays disabled, no message); show "Couldn't reach the TV — same Wi-Fi?"
+- [x] `signin.html`: show the pairing URL as text under the QR code (no camera / screen readers); better alt text
+- [x] Phone page: way to type a 2-step code (type + Enter only, single-use, into the found window) instead of requiring the TV keyboard
+- [x] `pairing.html`: real `<label>`s instead of placeholder-only inputs; `aria-describedby` for errors
+- [x] `lang="en"` on `pairing.html` and `signin.html`
+- [x] `pairing.html`: catch `fetch` failures (button stays disabled, no message); show "Couldn't reach the TV — same Wi-Fi?"
 - [x] README: sign-in step 2 still says close with Alt+F4, but the window now closes by itself
 - [x] README and plan: document current weaknesses honestly (argv, reusable link, wrong-window typing, timed step) and the pairing design
-- [ ] After each fix above, remove the matching weakness from README "Signing in from your phone" and plan.md
+- [x] After each fix above, remove the matching weakness from README "Signing in from your phone" and plan.md
 
 ## Phase 5 — Account feeds (implemented; real-account check pending)
 
@@ -100,6 +100,6 @@ Accessibility:
 ## Known issues / small fixes
 
 - [x] Keep Home focus on the original video after the first search (recent searches now follow the stable video rows; browser regression test passes)
-- [ ] `/api/search?limit=abc` returns a plain-text error instead of `{"error": ...}`
+- [x] `/api/search?limit=abc` returns a plain-text error instead of `{"error": ...}`
 - [x] Replace the three placeholder Home searches with Continue watching, Recommended and Subscriptions
 - [ ] Follow up on the reported mpv warnings: `client removed during hook handling`, `Packet corrupt`, `Invalid OBU length`, and `Failed to parse temporal unit`. The log confirms AV1 1080p59.94 playback with VA-API; whether playback visibly failed or the user quit at ~20 s is not confirmed. Record the video ID and reproduction steps if it recurs.

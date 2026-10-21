@@ -1,4 +1,5 @@
 <!doctype html>
+<html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CouchTube sign-in</title>
@@ -11,13 +12,15 @@
 </style>
 <h1>Sign in with your phone</h1>
 <div id="qr"></div>
+<p id="url" style="word-break:break-all"></p>
 <p id="note">Scan this with your phone (same Wi-Fi). Keep that page open, then continue to Google here and type your email and password on the phone.</p>
 <a id="go" href="https://accounts.google.com/ServiceLogin?continue=https://www.youtube.com" autofocus>Continue to Google sign-in</a>
 <p>Press Enter to continue. You can also just type on the TV keyboard.</p>
 <script>
   fetch('/api/pairing', { cache: 'no-store' }).then((r) => r.json()).then((p) => {
     if (!p.svg) throw 0
-    document.getElementById('qr').innerHTML = '<img alt="QR code" src="data:image/svg+xml;utf8,' + encodeURIComponent(p.svg) + '">'
+    document.getElementById('qr').innerHTML = '<img alt="QR code for the phone sign-in link, which is also written below" src="data:image/svg+xml;utf8,' + encodeURIComponent(p.svg) + '">'
+    document.getElementById('url').textContent = p.url
   }).catch(() => { document.getElementById('note').textContent = 'Phone pairing is unavailable. Continue and use the TV keyboard.' })
   document.getElementById('go').focus()
 </script>

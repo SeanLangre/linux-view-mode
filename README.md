@@ -76,26 +76,23 @@ Each account has its own Firefox folder; Guest never loads account cookies. A na
 
 The QR code opens a page on your phone that works as a keyboard for the Firefox sign-in window. It does not log in for you and does not use Bluetooth.
 
-How it works: while a sign-in window is open, the backend creates a random 128-bit token and shows `http://<server LAN address>:7879/p/<token>` as a QR code. The phone page sends your email and password to the backend, which types them into the Firefox window with `xdotool`. Closing the sign-in window ends the session and the link stops working.
+How it works: while a sign-in window is open, the backend opens port 7879, creates a random 128-bit token and shows `http://<server LAN address>:7879/p/<token>` as a QR code (and as text under it). The phone page sends text to the backend, which types it into the Firefox window with `xdotool`. Closing the sign-in window ends the session, closes the port, and the link stops working.
 
-Using it: scan the QR code and keep the phone page open. Press Enter on the TV to continue to Google so the email field is showing. On the phone, fill in the email and password (a password manager can do this) and tap **Sign in**. The TV types the email, presses Enter, waits 4 seconds for Google's password page, then types the password and presses Enter. Approve any 2-step prompt on your phone. The phone page has no other keys; use the TV keyboard for anything else, such as a verification code.
+Using it: scan the QR code (or type the link) and keep the phone page open. Press Enter on the TV to continue to Google so the email field is showing. On the phone, do the steps in order: **1. Email** (typed, then Enter), then once the TV shows the password page, **2. Password** (typed, then Enter, so a password manager can fill it), then **3. 2-step code** if Google asks. Approve any 2-step prompt on your phone. Use the TV keyboard for anything else.
 
 Safety:
-- **The password crosses your Wi-Fi unencrypted.** The phone page uses plain HTTP, so someone else on the same network could read what you type. Use it only on a network you trust, never on shared or guest Wi-Fi. HTTPS would need a certificate the phone trusts, so it isn't used.
-- **Port 7879 is the only part of CouchTube reachable from the network.** The main API stays on `127.0.0.1`. The pairing port answers only to the live token, with 404 for anything else, and the token is gone when the sign-in window closes. Anyone who sees the QR code or link while the window is open can type into it, so don't show the TV screen to people you don't trust during sign-in.
-- Typed text is never logged. It is passed to `xdotool` without a shell, and each of the email and password is limited to 256 characters. The only route that types is the one-step sign-in.
-- **The password is briefly visible to other local users.** It is currently passed to `xdotool` as a command-line argument, which any user on the machine can read with `ps` while the typing runs. On a single-user TV box this is low risk; moving it to stdin is planned.
-- **The link works more than once** while the window is open: each **Sign in** tap types again.
+- **The password crosses your Wi-Fi unencrypted.** The phone page uses plain HTTP, so someone else on the same network could read what you type. Use it only on a network you trust, never on shared or guest Wi-Fi. HTTPS would need a certificate the phone trusts, so it isn't used; an encrypted form is planned.
+- **Port 7879 is the only part of CouchTube reachable from the network, and only while a sign-in window is open.** The main API stays on `127.0.0.1` and rejects requests with any other `Host`. The pairing port answers only to the live token, with 404 for anything else. Anyone who sees the QR code or link while the window is open can type into it, so don't show the TV screen to people you don't trust during sign-in.
+- Typed text is never logged. It is sent to `xdotool` on stdin (not visible in `ps`) without a shell, and is limited to 256 characters on one line.
+- Typing fails closed: if the sign-in window can't be found or doesn't take focus, nothing is typed.
+- Email and password can each be sent once per sign-in; the code up to 3 times. After that the phone page says to use the TV keyboard.
 - Keep port 7879 closed to the internet. Do not forward it on your router.
 
 Limits:
 - Needs `xdotool`. If it is missing, the phone page shows "the TV could not type".
 - Firefox is started with `MOZ_ENABLE_WAYLAND=0` so that `xdotool` can reach it under XWayland. There is no equivalent that works on KDE's Wayland.
-- The one-tap sign-in is timed: if Google is slow, shows a captcha or an account chooser, or the email isn't focused, it can type into the wrong place. Finish by hand on the TV keyboard.
 - Some phone password managers refuse to fill on `http://` pages. If yours does, copy the password from it and paste it into the field.
-- If the Firefox window can't be found, typing currently goes to whichever window has focus. Keep the sign-in window in front while using the phone.
-- If the email page is still showing after 4 seconds, the password is typed into the email field and can appear on the TV screen. If Google is slow, sign in on the TV keyboard instead.
-- The QR code is the only way to get the phone link; the URL is not shown as text yet. 2-step codes must be typed on the TV keyboard.
+- You choose when to send the password: if you tap it while the email page is still showing, it is typed into the email field and can appear on the TV screen. Wait for the password page.
 
 These weaknesses and the planned fixes are tracked under **Sign-in review** in [`TODO.md`](TODO.md).
 - The phone cannot see the TV screen, and it cannot click a field for you. The email field must already be focused on the TV.

@@ -86,9 +86,10 @@ How to run the code is in `README.md`; the working checklist is `TODO.md`.
 
 ### Phone pairing (`pairing.rs`)
 - While a sign-in window is open, a random 128-bit token is live; the TV shows `http://<LAN IP>:7879/p/<token>` as a QR code. Closing the window ends the token.
-- The phone page sends email + password; the backend types them into the Firefox window with `xdotool` (email, Enter, wait 4 s, password, Enter). There are no other typing routes.
-- Port 7879 listens on all interfaces and is the only part of CouchTube reachable from the network. Plain HTTP: the password crosses the LAN unencrypted, so only use it on a trusted network.
-- Review on 2026-10-21 found weaknesses (typing into the wrong window, timed step, password in argv, reusable token, always-open port, no Host check on the main API, accessibility gaps). The fixes are in the **Sign-in review** section of `TODO.md`.
+- The phone page has three steps, each a separate request: email, password, and an optional 2-step code. Each types the text into the Firefox window and presses Enter. The email and password steps work once per session (a failed attempt is given back); the code step up to 3 times. There are no other typing routes.
+- Typing fails closed: the window is found by process id, focused, and focus is checked before typing and before Enter. The text goes to `xdotool type --file -` on stdin, never as an argument. `--window` isn't used because it sends synthetic events Firefox ignores.
+- Port 7879 listens on all interfaces **only while a sign-in window is open**, and is the only part of CouchTube reachable from the network. Plain HTTP: the password crosses the LAN unencrypted, so only use it on a trusted network (an encrypted form is still planned: see `TODO.md`).
+- The main server rejects requests whose `Host` isn't `127.0.0.1:<port>` or `localhost:<port>`.
 
 ### Keeping the login alive
 YouTube refreshes some login cookies over time, and a session that's never refreshed eventually logs out. Plan: once a day, a timer briefly runs `firefox --headless --profile <dir> https://www.youtube.com` (about 30 s) so the cookies get refreshed. *Phase 0 checks that this is needed and that it works.*
@@ -177,7 +178,7 @@ React 19 + TypeScript + Vite 8, tested with vitest, linted with oxlint. No UI li
 | GET | `/api/profiles/:id/status` ✅ | Login state/message; `?check=true` starts a check |
 | GET | `/api/pairing` ✅ | Phone URL and QR SVG while a sign-in window is open, else 404 |
 | GET | `/signin` ✅ | Sign-in start page shown in the account Firefox window |
-| GET/POST | `:7879/p/:token`, `/p/:token/login` ✅ | Phone page and one-step sign-in (LAN, token required) |
+| GET/POST | `:7879/p/:token`, `/p/:token/{email,password,code}` ✅ | Phone page and its three typing steps (LAN, token required, only while signing in) |
 | GET | `/api/feed/:kind` ✅ | `continue`, `recommended`, `subscriptions`, `history`, `watchlater`, `liked` |
 | GET | `/api/search?q=&limit=` ✅ | Search (default 24, max 50 results) |
 | GET | `/api/channel/:id` ✅ | Channel name + latest 24 uploads |
@@ -197,7 +198,7 @@ React 19 + TypeScript + Vite 8, tested with vitest, linted with oxlint. No UI li
 
 ### Security rules
 - Backend binds to **127.0.0.1 only** (it starts processes and holds account access). The one exception is the phone pairing port (7879), which answers only to the live sign-in token.
-- Planned: the main API rejects requests whose `Host` isn't `127.0.0.1:<port>`/`localhost:<port>` (DNS rebinding), and port 7879 only listens during sign-in.
+- The main server rejects requests whose `Host` isn't `127.0.0.1:<port>`/`localhost:<port>` (DNS rebinding), and port 7879 only listens during sign-in.
 - Never put secrets in process arguments (readable via `ps`); pass them on stdin. Typing tools must fail closed if the target window isn't found.
 - Validate video IDs (`^[A-Za-z0-9_-]{11}$`) and channel IDs (`^UC[A-Za-z0-9_-]{22}$`). Always build URLs yourself. Never use a shell. Put `--` before positional arguments.
 - Profile folders `0700`. Never log cookies.

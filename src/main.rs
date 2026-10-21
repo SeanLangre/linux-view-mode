@@ -84,6 +84,7 @@ async fn main() -> Result<()> {
         )
         .nest("/api", api::router(state))
         .fallback_service(frontend)
+        .layer(axum::middleware::from_fn_with_state(port, api::require_local_host))
         .layer(TraceLayer::new_for_http());
 
     // Loopback only: the API starts processes and will hold account logins.
@@ -96,14 +97,6 @@ async fn main() -> Result<()> {
         frontend_dir.display()
     );
 
-    // The one LAN-facing listener: it only serves the phone keyboard, and only while a
-    // sign-in window is open (every route needs that session's random token).
-    let pair_addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, pair_port));
-    let pair_listener = tokio::net::TcpListener::bind(pair_addr)
-        .await
-        .with_context(|| format!("could not listen on {pair_addr}"))?;
-    let phone = tokio::spawn(axum::serve(pair_listener, pairing.router()).into_future());
-
     let result = axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let ctrl_c = tokio::signal::ctrl_c();
@@ -114,7 +107,7 @@ async fn main() -> Result<()> {
         })
         .await;
     monitor.abort();
-    phone.abort();
+    pairing.end().await;
     playback.stop().await?;
     result?;
     Ok(())

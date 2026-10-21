@@ -85,8 +85,10 @@ impl Runtime {
 /// True once the sign-in window has stored YouTube's login cookie. Firefox keeps the cookie
 /// database open, so read a copy of it and its write-ahead log instead of the live files.
 fn logged_in(folder: &Path) -> bool {
+    let Ok(copy) = tempfile_dir() else {
+        return false;
+    };
     let check = || -> Result<bool> {
-        let copy = tempfile_dir()?;
         for name in ["cookies.sqlite", "cookies.sqlite-wal"] {
             let source = folder.join(name);
             if source.exists() {
@@ -102,10 +104,11 @@ fn logged_in(folder: &Path) -> bool {
             [],
             |row| row.get::<_, i64>(0),
         )?;
-        let _ = std::fs::remove_dir_all(&copy);
         Ok(found > 0)
     };
-    check().unwrap_or(false)
+    let found = check().unwrap_or(false);
+    let _ = std::fs::remove_dir_all(&copy);
+    found
 }
 
 fn tempfile_dir() -> Result<PathBuf> {
