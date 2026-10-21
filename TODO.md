@@ -47,6 +47,30 @@ Checklist for [`plan.md`](plan.md). Tick items as they're done.
 - [x] Try the profile/sign-in flow with a real account (user report, 2026-10-20)
 - [ ] Explicitly verify two real accounts: sign in two real accounts, check YouTube accepts both logins, and switch with `p`
 
+## Sign-in review (2026-10-21)
+
+Safety:
+
+- [ ] `pairing.rs` `send_keys`: fail closed when the Firefox window isn't found (no typing into whatever is focused, e.g. a terminal); pass `--window <id>` to `type`/`key`
+- [ ] Replace the fixed 4 s email→password delay: two phone steps ("Type email", then "Password page is showing") or check the window title first, so the password can't land in the email field and show on the TV
+- [ ] Send typed text to `xdotool type --file -` on stdin instead of argv (argv is readable via `ps`/`/proc/<pid>/cmdline`); fix the README claim
+- [ ] Encrypt the phone form against passive Wi-Fi sniffing: one-time key in the QR URL `#fragment`, inline crypto (e.g. tweetnacl; no WebCrypto on http)
+- [ ] Make the pairing token single-use: end the session after a successful `/login`
+- [ ] Only listen on port 7879 while a sign-in window is open
+- [ ] Main API: reject requests whose `Host` isn't `127.0.0.1:<port>`/`localhost:<port>` (DNS rebinding could read `/api/pairing` or delete profiles)
+- [ ] `profiles.rs` `logged_in()`: remove the temporary cookie copy on every path, including errors
+
+Accessibility:
+
+- [ ] `signin.html`: show the pairing URL as text under the QR code (no camera / screen readers); better alt text
+- [ ] Phone page: way to type a 2-step code (type + Enter only, single-use, into the found window) instead of requiring the TV keyboard
+- [ ] `pairing.html`: real `<label>`s instead of placeholder-only inputs; `aria-describedby` for errors
+- [ ] `lang="en"` on `pairing.html` and `signin.html`
+- [ ] `pairing.html`: catch `fetch` failures (button stays disabled, no message); show "Couldn't reach the TV — same Wi-Fi?"
+- [x] README: sign-in step 2 still says close with Alt+F4, but the window now closes by itself
+- [x] README and plan: document current weaknesses honestly (argv, reusable link, wrong-window typing, timed step) and the pairing design
+- [ ] After each fix above, remove the matching weakness from README "Signing in from your phone" and plan.md
+
 ## Phase 5 — Account feeds (implemented; real-account check pending)
 
 - [x] Home rows: Continue watching, Recommended, Subscriptions (replace the placeholder Music/Nature/Science rows)

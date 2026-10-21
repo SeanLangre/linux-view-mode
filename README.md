@@ -66,7 +66,7 @@ and open `http://127.0.0.1:5173`. Vite forwards `/api` calls to the backend.
 ## Profiles and sign-in
 
 1. On **Who’s watching?**, choose **Add profile**, enter a name and choose a colour, then press **Create and sign in**.
-2. The separate Firefox window opens on a page with a QR code. Scan it with your phone (see below), then press **Enter** to continue to Google. Sign in with the TV keyboard or the phone, complete any verification, then close that window with **Alt+F4**.
+2. The separate Firefox window opens on a page with a QR code. Scan it with your phone (see below), then press **Enter** to continue to Google. Sign in with the TV keyboard or the phone and complete any verification. The window closes by itself a few seconds after YouTube's login cookie appears; to give up, close it with **Alt+F4**.
 3. Wait for **YouTube sign-in works**, then choose **Continue to CouchTube**. A failed check can mean a connection or yt-dlp problem; use **Check sign-in** or **Open sign-in again** to retry.
 4. Press **P** while browsing to switch profiles. On the picker, highlight a named profile and press **S** to reopen sign-in or **D** to remove it (with confirmation).
 
@@ -83,7 +83,9 @@ Using it: scan the QR code and keep the phone page open. Press Enter on the TV t
 Safety:
 - **The password crosses your Wi-Fi unencrypted.** The phone page uses plain HTTP, so someone else on the same network could read what you type. Use it only on a network you trust, never on shared or guest Wi-Fi. HTTPS would need a certificate the phone trusts, so it isn't used.
 - **Port 7879 is the only part of CouchTube reachable from the network.** The main API stays on `127.0.0.1`. The pairing port answers only to the live token, with 404 for anything else, and the token is gone when the sign-in window closes. Anyone who sees the QR code or link while the window is open can type into it, so don't show the TV screen to people you don't trust during sign-in.
-- Typed text is never logged. It is passed to `xdotool` as an argument, not through a shell, and each of the email and password is limited to 256 characters. The only route that types is the one-step sign-in.
+- Typed text is never logged. It is passed to `xdotool` without a shell, and each of the email and password is limited to 256 characters. The only route that types is the one-step sign-in.
+- **The password is briefly visible to other local users.** It is currently passed to `xdotool` as a command-line argument, which any user on the machine can read with `ps` while the typing runs. On a single-user TV box this is low risk; moving it to stdin is planned.
+- **The link works more than once** while the window is open: each **Sign in** tap types again.
 - Keep port 7879 closed to the internet. Do not forward it on your router.
 
 Limits:
@@ -91,6 +93,11 @@ Limits:
 - Firefox is started with `MOZ_ENABLE_WAYLAND=0` so that `xdotool` can reach it under XWayland. There is no equivalent that works on KDE's Wayland.
 - The one-tap sign-in is timed: if Google is slow, shows a captcha or an account chooser, or the email isn't focused, it can type into the wrong place. Finish by hand on the TV keyboard.
 - Some phone password managers refuse to fill on `http://` pages. If yours does, copy the password from it and paste it into the field.
+- If the Firefox window can't be found, typing currently goes to whichever window has focus. Keep the sign-in window in front while using the phone.
+- If the email page is still showing after 4 seconds, the password is typed into the email field and can appear on the TV screen. If Google is slow, sign in on the TV keyboard instead.
+- The QR code is the only way to get the phone link; the URL is not shown as text yet. 2-step codes must be typed on the TV keyboard.
+
+These weaknesses and the planned fixes are tracked under **Sign-in review** in [`TODO.md`](TODO.md).
 - The phone cannot see the TV screen, and it cannot click a field for you. The email field must already be focused on the TV.
 - If you run the backend as a systemd service, set `DISPLAY` for it, or `xdotool` cannot find the window.
 - The phone and the server must be on the same network. Guest networks and routers with client isolation block it.

@@ -4,7 +4,7 @@ A fullscreen, keyboard-only YouTube interface for the Arch Linux server connecte
 
 How to run the code is in `README.md`; the working checklist is `TODO.md`.
 
-### Status (2026-10-20)
+### Status (2026-10-21)
 | Phase | State |
 |---|---|
 | Server setup (Windows → Arch) | Not started |
@@ -12,7 +12,7 @@ How to run the code is in `README.md`; the working checklist is `TODO.md`.
 | 1 — Backend skeleton | ✅ Done |
 | 2 — TV interface | ✅ Done (still to try in `firefox --kiosk`) |
 | 3 — Playback | Implemented; user test positive, explicit focus check pending |
-| 4 — Profiles and sign-in | Implemented; user test positive, explicit two-account check pending |
+| 4 — Profiles and sign-in | Implemented with phone pairing; user test positive, two-account check and sign-in review fixes pending |
 | 5 — Account feeds | Implemented; real-account verification pending |
 | 6–7 | Not started |
 
@@ -77,10 +77,18 @@ How to run the code is in `README.md`; the working checklist is `TODO.md`.
 - One profile is active at a time. Every yt-dlp and mpv call uses that profile's login.
 
 ### Signing in (once per account, from the TV)
-1. "Add account" in the UI → backend opens a separate Firefox window:
-   `firefox --new-instance --profile <dir> https://accounts.google.com/ServiceLogin?continue=https://www.youtube.com`
-2. Sign in with the keyboard (approve 2FA on your phone), then close the window (Ctrl+W).
-3. Backend checks the login works by fetching one page of `:ytsubs`. The profile shows a ✓ or "Sign in again".
+1. "Add account" in the UI → backend opens a separate Firefox window (X11 mode, `MOZ_ENABLE_WAYLAND=0`):
+   `firefox --new-instance --no-remote --profile <dir> http://127.0.0.1:7878/signin`
+   That page shows a QR code for phone pairing and a link to `accounts.google.com/ServiceLogin?continue=https://www.youtube.com`.
+2. Sign in with the TV keyboard, or from the phone page (see below). Approve 2FA on your phone.
+3. The backend polls the profile's `cookies.sqlite` (a copy, since Firefox holds it open) every 2 s. Once YouTube's `LOGIN_INFO` cookie has been seen three times in a row, it closes Firefox so the cookies are flushed.
+4. Backend checks the login works by fetching one item of `:ytsubs`. The profile shows a ✓ or "Sign in again".
+
+### Phone pairing (`pairing.rs`)
+- While a sign-in window is open, a random 128-bit token is live; the TV shows `http://<LAN IP>:7879/p/<token>` as a QR code. Closing the window ends the token.
+- The phone page sends email + password; the backend types them into the Firefox window with `xdotool` (email, Enter, wait 4 s, password, Enter). There are no other typing routes.
+- Port 7879 listens on all interfaces and is the only part of CouchTube reachable from the network. Plain HTTP: the password crosses the LAN unencrypted, so only use it on a trusted network.
+- Review on 2026-10-21 found weaknesses (typing into the wrong window, timed step, password in argv, reusable token, always-open port, no Host check on the main API, accessibility gaps). The fixes are in the **Sign-in review** section of `TODO.md`.
 
 ### Keeping the login alive
 YouTube refreshes some login cookies over time, and a session that's never refreshed eventually logs out. Plan: once a day, a timer briefly runs `firefox --headless --profile <dir> https://www.youtube.com` (about 30 s) so the cookies get refreshed. *Phase 0 checks that this is needed and that it works.*
@@ -129,6 +137,8 @@ src/
   api.rs                   ✅ HTTP handlers
   ytdlp.rs                 ✅ running yt-dlp: search, channel (later: feeds, mark-watched)
   profiles.rs              ✅ profiles, Firefox profile setup, sign-in, login check (refresh timer in Phase 6)
+  pairing.rs               ✅ phone pairing for sign-in: token, QR code, LAN page, xdotool typing
+  signin.html, pairing.html ✅ sign-in start page (TV) and phone page
   player.rs                ✅ mpv process + persistent IPC (one player at a time)
   playback.rs              ✅ progress, watched sync, queue advancement
   feeds.rs                 ✅ account feeds, persistent cache and prefetch
@@ -165,6 +175,9 @@ React 19 + TypeScript + Vite 8, tested with vitest, linted with oxlint. No UI li
 | POST | `/api/profiles/:id/select` ✅ | Set the active profile |
 | POST | `/api/profiles/:id/signin` ✅ | Open the sign-in window |
 | GET | `/api/profiles/:id/status` ✅ | Login state/message; `?check=true` starts a check |
+| GET | `/api/pairing` ✅ | Phone URL and QR SVG while a sign-in window is open, else 404 |
+| GET | `/signin` ✅ | Sign-in start page shown in the account Firefox window |
+| GET/POST | `:7879/p/:token`, `/p/:token/login` ✅ | Phone page and one-step sign-in (LAN, token required) |
 | GET | `/api/feed/:kind` ✅ | `continue`, `recommended`, `subscriptions`, `history`, `watchlater`, `liked` |
 | GET | `/api/search?q=&limit=` ✅ | Search (default 24, max 50 results) |
 | GET | `/api/channel/:id` ✅ | Channel name + latest 24 uploads |
@@ -183,7 +196,9 @@ React 19 + TypeScript + Vite 8, tested with vitest, linted with oxlint. No UI li
 - `feed_cache(profile_id, cache_key, json, expires_at)` stores feed/search/channel responses
 
 ### Security rules
-- Backend binds to **127.0.0.1 only** (it starts processes and holds account access).
+- Backend binds to **127.0.0.1 only** (it starts processes and holds account access). The one exception is the phone pairing port (7879), which answers only to the live sign-in token.
+- Planned: the main API rejects requests whose `Host` isn't `127.0.0.1:<port>`/`localhost:<port>` (DNS rebinding), and port 7879 only listens during sign-in.
+- Never put secrets in process arguments (readable via `ps`); pass them on stdin. Typing tools must fail closed if the target window isn't found.
 - Validate video IDs (`^[A-Za-z0-9_-]{11}$`) and channel IDs (`^UC[A-Za-z0-9_-]{22}$`). Always build URLs yourself. Never use a shell. Put `--` before positional arguments.
 - Profile folders `0700`. Never log cookies.
 - Errors go to the UI as `{"error": "..."}` with short, user-readable messages; details stay in the server log.
@@ -287,6 +302,7 @@ Backend tests cover process replacement, stop, failed exits and IPC replies; fro
 - Sign-in status tracks Firefox opening/closing and a single-item `:ytsubs` check, with a manual retry.
 - Verified with simulated account tools: isolation of cookies, Guest, login/check failures, deletion and restart persistence. Headless Chromium exercised Guest → add/sign-in → playback/return → remove → switch using keyboard events. Real mpv IPC confirmed cookie paths with spaces/commas are passed correctly. The user subsequently reported the real profile/sign-in flow worked well (2026-10-20). The exact two-account switching check remains to be confirmed.
 - "Who's watching?" screen, add/remove profile, Firefox profile setup (`user.js`, uBlock Origin, SponsorBlock), sign-in window, login check, Guest profile.
+- Phone pairing (QR code → LAN page → `xdotool` types email and password) added 2026-10-21; the sign-in window now closes itself once the login cookie appears. A safety/accessibility review the same day left follow-ups in `TODO.md`.
 - yt-dlp and mpv use the active profile's login.
 - **Done when:** two accounts can be signed in and switched with `p`.
 
