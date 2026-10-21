@@ -1,0 +1,91 @@
+# Alternative login: Google's own phone sign-in
+
+Plan for signing in **without sending the password over the network**. Firefox on the TV still
+does the sign-in, so it gets the real YouTube web cookies that yt-dlp and mpv need
+(`--cookies-from-browser`, `src/ytdlp.rs`, `src/player.rs`). The phone only approves the
+sign-in, using Google's own methods.
+
+Related: [`encryption-plan.md`](encryption-plan.md). If this works, encrypted typing becomes the
+fallback rather than the main path (see "Effect on the encryption plan").
+
+## Why not copy cookies from another device
+The rejected option was signing in on another browser and copying the cookies to the TV.
+- Phone browsers (Chrome, Safari) can't export cookies, so a laptop would be needed.
+- A session cookie skips 2-step verification, so a stolen cookie is worse than a stolen password.
+  Sending one over the LAN has the same sniffing and active-attacker problems, with more at stake.
+- Google rotates YouTube cookies and may end sessions that move to another device or IP. Chrome
+  ties Google cookies to the device on some platforms (Device Bound Session Credentials).
+- It would need extra plumbing: writing into Firefox's `cookies.sqlite` while Firefox is closed.
+
+## The two methods
+
+### 1. Passkey via QR code (best)
+1. The user opens Firefox sign-in on the TV and types the email (on the TV keyboard, or with
+   phone pairing, which is only the email now).
+2. Google offers **Use your passkey**, or the user picks it under "Try another way".
+3. Firefox shows a QR code. The user scans it with the phone's camera.
+4. The phone and the TV check over **Bluetooth** that they're close to each other. Then the phone
+   unlocks the passkey (fingerprint, face or PIN) and the sign-in finishes in Firefox on the TV.
+
+- **Nothing reusable crosses the Wi-Fi.** The passkey never leaves the phone, and each signature
+  only works for that one sign-in.
+- **It stops the active attacker too.** The Bluetooth check means a relay from somewhere else
+  fails, and passkeys are tied to `google.com`, so a fake page can't use them.
+- **Needs:** a Bluetooth adapter on the TV box that Firefox can use; Firefox on Linux supporting
+  passkeys from a phone (the "hybrid" transport); a passkey on the Google account (Android phones
+  signed in to Google usually have one already); and the phone's Bluetooth turned on.
+
+### 2. Google prompt (simpler, weaker)
+1. The user types the email on the TV.
+2. Google sends "Is it you trying to sign in?" to the phone (Android with Google Play services, or
+   iPhone with the Google or Gmail app). The user taps **Yes**, sometimes after matching a number
+   shown on the TV.
+
+- **No password is typed**, as long as Google doesn't ask for it. Whether it does depends on the
+  account (2-step settings, "skip password when possible").
+- **Needs:** no Bluetooth and no browser support, just a phone signed in to the account.
+- **It's weaker than a passkey:** the attacker could start a sign-in at the same moment as the user
+  (prompt bombing), and the number match is only partial protection. Fine as a second choice.
+
+## What changes in CouchTube
+| Where | Change |
+|---|---|
+| `src/signin.html` | Above "Continue to Google sign-in", say how to sign in without a password: "After your email, choose **Use your passkey** and scan the QR code with your phone, or approve the prompt on your phone. Use the phone keyboard or TV keyboard only if Google asks for a password." |
+| `src/pairing.html` | Lead with the email step; label the password step "Only if Google asks for a password"; repeat the passkey and prompt hint |
+| `frontend/src/ProfileGate.tsx` | The same short hint next to the phone QR code, so the user doesn't confuse CouchTube's QR code (phone keyboard) with Firefox's (passkey) |
+| `plan.md`, `README.md` | Describe the recommended sign-in order: passkey, then Google prompt, then phone keyboard, then TV keyboard |
+| `deploy/couchtube.service` | Only if the tests below show Firefox can't reach Bluetooth when started by the service: pass the D-Bus environment it needs |
+
+The cookie handling doesn't change: the sign-in window still closes once `LOGIN_INFO` appears
+three times in a row (`src/profiles.rs`), whichever way the user signed in.
+
+Two QR codes can be on screen at different times: CouchTube's (opens the phone keyboard page) and
+Firefox's (passkey). The wording above has to make clear which is which. Firefox's appears only
+after **Use your passkey** is chosen, so they're never shown together.
+
+## Effect on the encryption plan
+- If passkeys work: the phone keyboard sends only the email, plus a password or 2-step code if
+  Google falls back to asking for them. `encryption-plan.md` still applies to those, but it's no
+  longer the main way in, so it can wait or be reduced to the minimum (encryption without the
+  confirmation code).
+- If only the Google prompt works: the password usually isn't sent either, so the same reasoning
+  applies, with the password step as a more common fallback.
+- If neither works: `encryption-plan.md` stays the main path, unchanged.
+
+## Tests to do first (decide before writing code)
+1. **Passkeys on the dev machine** (Firefox 157, Bluetooth adapter present): start the sign-in
+   profile the same way CouchTube does (`firefox --new-instance --no-remote --profile <dir>`), go
+   to accounts.google.com, choose **Use your passkey**, and check that:
+   - a QR code appears (if it doesn't, Firefox on Linux doesn't support passkeys from a phone yet;
+     record the version);
+   - the phone connects over Bluetooth and the sign-in finishes;
+   - `LOGIN_INFO` appears in the profile's `cookies.sqlite` and CouchTube marks the profile signed in.
+2. **The same, but started by the backend service** (systemd user unit), to catch missing access
+   to Bluetooth or D-Bus.
+3. **Google prompt:** sign in with the email only and check whether Google offers the phone
+   prompt without asking for a password, and whether the cookies work afterwards.
+4. **On the RN96 once Arch is installed:** `bluetoothctl list` shows an adapter, then repeat test 1.
+5. **The daily cookie refresh** (`plan.md`, "Keeping the login alive") still works for a profile
+   that signed in with a passkey. It should, because the cookies are the same kind.
+
+Record the results in `TODO.md` under the sign-in follow-ups.

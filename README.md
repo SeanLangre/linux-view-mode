@@ -215,3 +215,31 @@ Set these in Plasma by hand (CouchTube does not change them):
 - Optional: bind a KDE shortcut (System Settings → Shortcuts) to the **CouchTube kiosk** launcher, which runs `systemctl --user start couchtube-kiosk`.
 
 **Exit to desktop** (last item in the Home menu) stops the kiosk service; the launcher or `systemctl --user start couchtube-kiosk` starts it again. Firefox restarts by itself if it crashes. The services need the desktop session's `DISPLAY` and `WAYLAND_DISPLAY`; if mpv or the phone keyboard can't open a window, run `systemctl --user import-environment DISPLAY WAYLAND_DISPLAY` once and restart `couchtube`.
+
+## AppImage
+
+A single-file build for running CouchTube without installing it. It contains the backend, the built frontend and the mpv config; `mpv`, `firefox` and `yt-dlp` still come from the system (plus `xdotool` for the phone keyboard and `curl`).
+
+Build it from a checkout:
+
+```bash
+sudo pacman -S --needed rust nodejs npm librsvg   # librsvg provides rsvg-convert
+# appimagetool: from the AUR (appimagetool-bin) or https://github.com/AppImage/appimagetool/releases, on PATH
+./packaging/build-appimage.sh
+```
+
+The script runs `npm ci && npm run build` in `frontend/`, builds the backend with `cargo build --release` (with the home and project paths removed from the binary), assembles `target/AppDir` from `packaging/AppRun`, `packaging/couchtube.desktop` and an icon made from `frontend/public/favicon.svg`, and writes `CouchTube-<arch>.AppImage` (for example `CouchTube-x86_64.AppImage`) to the repository root. The file is in `.gitignore`.
+
+Run it:
+
+```bash
+chmod +x CouchTube-x86_64.AppImage
+./CouchTube-x86_64.AppImage
+```
+
+It starts the backend, waits for `/api/health`, and opens `firefox --kiosk` on it; closing Firefox (**Alt+F4**) also stops the backend. The settings above (`COUCHTUBE_PORT`, `COUCHTUBE_DATA_DIR`, …) work the same, and profiles are kept in the same data folder as a normal install.
+
+Differences from `deploy/install.sh`:
+- No systemd units, so no auto-start, crash restart, or daily sign-in refresh.
+- The Firefox extension policy (uBlock Origin, SponsorBlock) isn't installed; copy `config/firefox/policies.json` to `/etc/firefox/policies/` by hand if you want it.
+- AppImages need FUSE 2 (`sudo pacman -S fuse2`). Without it, run `./CouchTube-x86_64.AppImage --appimage-extract-and-run`.
