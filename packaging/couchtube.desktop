@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=CouchTube
+Comment=Couch-friendly YouTube for the TV
+Exec=couchtube
+Icon=couchtube
+Categories=AudioVideo;Video;
+Terminal=false
