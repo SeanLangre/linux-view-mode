@@ -41,6 +41,8 @@ pub fn router(state: AppState) -> Router {
         .route("/profiles/{id}/status", get(login_status))
         .route("/system/exit", post(exit_to_desktop))
         .route("/pairing", get(pairing).post(start_pairing).delete(cancel_pairing))
+        .route("/pairing/confirm", post(confirm_pairing))
+        .route("/pairing/reject", post(reject_pairing))
         .route("/play", post(play))
         .route("/stop", post(stop))
         .route("/status", get(status))
@@ -408,7 +410,35 @@ async fn pairing(State(state): State<AppState>) -> Result<Json<serde_json::Value
         .await
         .map_err(internal)?
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no sign-in window is open"))?;
-    Ok(Json(json!({"url": url, "svg": svg})))
+    let phone = state.profiles.pairing.phone().await;
+    Ok(Json(json!({
+        "url": url,
+        "svg": svg,
+        "code": phone.as_ref().map(|p| &p.code),
+        "confirmed": phone.as_ref().is_some_and(|p| p.confirmed),
+    })))
+}
+
+#[derive(Deserialize)]
+struct ConfirmBody {
+    code: String,
+}
+
+/// The user says the phone shows this code. Only the TV (this local API) can say so.
+async fn confirm_pairing(
+    State(state): State<AppState>,
+    Json(body): Json<ConfirmBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !state.profiles.pairing.confirm(&body.code).await {
+        return Err(ApiError::new(StatusCode::CONFLICT, "the phone's code changed: check the new one"));
+    }
+    Ok(Json(json!({"status": "ok"})))
+}
+
+/// The code didn't match: kill the link (and any copy of it) and show a new QR code.
+async fn reject_pairing(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    state.profiles.pairing.reset().await.map_err(internal)?;
+    Ok(Json(json!({"status": "ok"})))
 }
 
 #[derive(Deserialize)]

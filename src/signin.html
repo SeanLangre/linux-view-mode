@@ -15,16 +15,39 @@
   <p>To type on your phone, scan this QR code, or open the link below.</p>
   <img id="qr" alt="QR code for the phone sign-in page">
   <p id="url"></p>
+  <div id="confirm" hidden role="alert">
+    <p>A phone connected. Does it show <strong id="code"></strong>?</p>
+    <a id="yes" href="#" role="button">Yes, that's my phone</a>
+    <a id="no" href="#" role="button">No</a>
+  </div>
+  <p id="connected" hidden>Phone connected.</p>
 </div>
 <p>Otherwise continue to Google and use the TV keyboard.</p>
 <a id="go" href="https://accounts.google.com/ServiceLogin?continue=https://www.youtube.com" autofocus>Continue to Google sign-in</a>
 <p>Press Enter to continue.</p>
 <script>
   document.getElementById('go').focus()
-  fetch('/api/pairing').then((r) => r.ok ? r.json() : null).then((info) => {
-    if (!info) return
-    document.getElementById('qr').src = 'data:image/svg+xml,' + encodeURIComponent(info.svg)
-    document.getElementById('url').textContent = info.url
-    document.getElementById('phone').hidden = false
-  }).catch(() => {})
+  const $ = (id) => document.getElementById(id)
+  const post = (path, body) => fetch('/api/pairing/' + path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+  let shownUrl = null, pending = null
+  function show(info) {
+    if (info.url !== shownUrl) {
+      shownUrl = info.url
+      $('qr').src = 'data:image/svg+xml,' + encodeURIComponent(info.svg)
+      $('url').textContent = info.url
+    }
+    pending = info.code && !info.confirmed ? info.code : null
+    $('code').textContent = pending ? pending.slice(0, 3) + ' ' + pending.slice(3) : ''
+    $('code').setAttribute('aria-label', pending ? pending.split('').join(' ') : '')
+    $('confirm').hidden = !pending
+    $('connected').hidden = !info.confirmed
+    $('phone').hidden = false
+  }
+  const load = () => fetch('/api/pairing').then((r) => r.ok ? r.json() : null).then((info) => info && show(info)).catch(() => {})
+  load()
+  setInterval(load, 1000)
+  $('yes').onclick = (e) => { e.preventDefault(); if (pending) post('confirm', { code: pending }).then(load, load) }
+  $('no').onclick = (e) => { e.preventDefault(); post('reject', {}).then(load, load) }
 </script>

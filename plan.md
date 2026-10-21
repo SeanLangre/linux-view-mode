@@ -89,7 +89,7 @@ How to run the code is in `README.md`; the working checklist is `TODO.md`.
 - From when the profile is created (or sign-in opened) until the sign-in window closes, a random 128-bit token is live; the CouchTube UI shows `http://<LAN IP>:7879/p/<token>` as a QR code and as text. Before Firefox opens, typing is refused with "window isn't open yet" (HTTP 425), and an unused session expires after 15 minutes or when the user leaves the screen. Closing the window ends the token.
 - The phone page has three steps, each a separate request: email, password, and an optional 2-step code. Each types the text into the Firefox window and presses Enter. The email and password steps work once per session (a failed attempt is given back); the code step up to 3 times. There are no other typing routes.
 - Typing fails closed: the window is found by process id, focused, and focus is checked before typing and before Enter. The text goes to `xdotool type --file -` on stdin, never as an argument. `--window` isn't used because it sends synthetic events Firefox ignores.
-- Port 7879 listens on all interfaces **only while a sign-in window is open**, and is the only part of CouchTube reachable from the network. Plain HTTP: the password crosses the LAN unencrypted, so only use it on a trusted network (an encrypted form is still planned: see `TODO.md`).
+- Port 7879 listens on all interfaces **only while a sign-in window is open**, and is the only part of CouchTube reachable from the network. Plain HTTP, but the phone's messages are sealed (XSalsa20-Poly1305) with a per-session key carried only in the QR URL's `#fragment`, with replay and step checks, and nothing is typed until the user confirms a code shown on both phone and TV (`encryption-plan.md`). That stops passive sniffing, not an active attacker who rewrites the page: trusted network only; on shared Wi-Fi use the TV keyboard.
 - The main server rejects requests whose `Host` isn't `127.0.0.1:<port>` or `localhost:<port>`.
 
 ### Keeping the login alive
@@ -177,9 +177,10 @@ React 19 + TypeScript + Vite 8, tested with vitest, linted with oxlint. No UI li
 | POST | `/api/profiles/:id/select` ✅ | Set the active profile |
 | POST | `/api/profiles/:id/signin` ✅ | Open the sign-in window |
 | GET | `/api/profiles/:id/status` ✅ | Login state/message; `?check=true` starts a check |
-| GET/POST/DELETE | `/api/pairing` ✅ | Phone URL and QR SVG while a sign-in is in progress, else 404; POST starts it before Firefox opens; DELETE cancels it if no window is open |
+| GET/POST/DELETE | `/api/pairing` ✅ | Phone URL (with key) and QR SVG, plus `code`/`confirmed` of the bound phone, while a sign-in is in progress, else 404; POST starts it before Firefox opens; DELETE cancels it if no window is open |
+| POST | `/api/pairing/confirm`, `/api/pairing/reject` ✅ | TV says the phone's code matches (409 if it changed) / doesn't match (new token and key) |
 | GET | `/signin` ✅ | Sign-in start page shown in the account Firefox window |
-| GET/POST | `:7879/p/:token`, `/p/:token/{email,password,code}` ✅ | Phone page and its three typing steps (LAN, token required, only while signing in) |
+| GET/POST | `:7879/p/:token`, `/p/:token/{hello,status,email,password,code}` ✅ | Phone page, encrypted hello (confirmation code), status poll and the three encrypted typing steps (LAN, token required, only while signing in) |
 | GET | `/api/feed/:kind` ✅ | `continue`, `recommended`, `subscriptions`, `history`, `watchlater`, `liked` |
 | GET | `/api/search?q=&limit=` ✅ | Search (default 24, max 50 results) |
 | GET | `/api/channel/:id` ✅ | Channel name + latest 24 uploads |
@@ -304,7 +305,7 @@ Backend tests cover process replacement, stop, failed exits and IPC replies; fro
 - Sign-in status tracks Firefox opening/closing and a single-item `:ytsubs` check, with a manual retry.
 - Verified with simulated account tools: isolation of cookies, Guest, login/check failures, deletion and restart persistence. Headless Chromium exercised Guest → add/sign-in → playback/return → remove → switch using keyboard events. Real mpv IPC confirmed cookie paths with spaces/commas are passed correctly. The user subsequently reported the real profile/sign-in flow worked well (2026-10-20). The exact two-account switching check remains to be confirmed.
 - "Who's watching?" screen, add/remove profile, Firefox profile setup (`user.js`, uBlock Origin, SponsorBlock), sign-in window, login check, Guest profile.
-- Phone pairing (QR code → LAN page → `xdotool` types email and password) added 2026-10-21; the sign-in window now closes itself once the login cookie appears. A safety/accessibility review the same day was then implemented: fail-closed typing, three phone steps instead of a timed delay, text on stdin, single-use steps, port open only during sign-in, a `Host` check on the main server, and accessibility fixes. Only the encrypted phone form remains (`TODO.md`). The QR code is shown only in the CouchTube UI, which asks to open Firefox separately. The user tried the phone flow and reported it "kind of worked"; the details weren't given.
+- Phone pairing (QR code → LAN page → `xdotool` types email and password) added 2026-10-21; the sign-in window now closes itself once the login cookie appears. A safety/accessibility review the same day was then implemented: fail-closed typing, three phone steps instead of a timed delay, text on stdin, single-use steps, port open only during sign-in, a `Host` check on the main server, and accessibility fixes. The phone form is now encrypted with a confirmation code (`encryption-plan.md`, implemented). The QR code is shown only in the CouchTube UI, which asks to open Firefox separately. The user tried the phone flow and reported it "kind of worked"; the details weren't given.
 - yt-dlp and mpv use the active profile's login.
 - **Done when:** two accounts can be signed in and switched with `p`.
 

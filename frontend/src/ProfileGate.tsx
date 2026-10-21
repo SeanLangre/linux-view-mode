@@ -64,6 +64,25 @@ export default function ProfileGate() {
     return () => { cancelled = true }
   }, [signingIn])
 
+  // While a QR code is shown, watch for a phone saying hello (or a replaced link after "No").
+  const hasQr = qr !== null
+  useEffect(() => {
+    if (!hasQr) return
+    let cancelled = false
+    let timer: number
+    async function poll() {
+      try {
+        const result = await api.pairing()
+        if (!cancelled) setQr(result)
+      } catch { /* the session ended; the QR effects above clear it */ }
+      if (!cancelled) timer = window.setTimeout(poll, 1000)
+    }
+    timer = window.setTimeout(poll, 1000)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [hasQr])
+
+  const pendingCode = qr?.code && !qr.confirmed ? qr.code : null
+
   useEffect(() => {
     if (active || loading || busy) return
     const target = view.kind === 'add'
@@ -72,7 +91,7 @@ export default function ProfileGate() {
     target?.focus()
     // Focus only when a panel opens or an operation completes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view.kind, active, loading, busy, loginBusy])
+  }, [view.kind, active, loading, busy, loginBusy, pendingCode])
 
   async function perform(action: () => Promise<void>) {
     if (operation.current) return
@@ -187,8 +206,25 @@ export default function ProfileGate() {
           : 'Choose Open Firefox sign-in when you are ready. It closes by itself once you are signed in, then CouchTube checks the login.'}</p>
         {qr && <div className="pairing">
           <img alt="QR code for the phone sign-in link, which is also written below" width={240} height={240} src={`data:image/svg+xml;utf8,${encodeURIComponent(qr.svg)}`} />
-          <p className="status">Scan with your phone (same Wi-Fi) to type your email and password there instead of on the TV keyboard.</p>
-          <p className="status">{qr.url}</p>
+          <div className="pairing-text">
+            <p>Scan with your phone (same Wi-Fi) to type your email and password there instead of on the TV keyboard.</p>
+            {pendingCode ? <div className="pairing-confirm" role="alert">
+              <p>A phone connected. Does it show this code?</p>
+              <strong className="pairing-code" aria-label={pendingCode.split('').join(' ')}>{pendingCode.slice(0, 3)} {pendingCode.slice(3)}</strong>
+              <div className="pairing-buttons">
+                <button data-nav disabled={busy} onClick={() => void perform(async () => {
+                  await api.confirmPairing(pendingCode)
+                  setQr(await api.pairing())
+                })}>Yes, that’s my phone</button>
+                <button data-nav disabled={busy} onClick={() => void perform(async () => {
+                  await api.rejectPairing()
+                  setQr(await api.pairing())
+                })}>No</button>
+              </div>
+            </div> : qr.confirmed
+              ? <p className="pairing-ok" role="status">✓ Phone connected. Open Firefox sign-in, then continue to Google.</p>
+              : <p className="pairing-url">{qr.url}</p>}
+          </div>
         </div>}
         <div className="profile-actions">
           <button data-nav disabled={busy || loginBusy} onClick={() => void choose(view.profile)}>

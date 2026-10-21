@@ -299,9 +299,18 @@ button:disabled, select:disabled { opacity: 0.5; }
 .profile-form { display: grid; gap: 1rem; max-width: 40rem; }
 .profile-form label { display: grid; gap: 0.4rem; }
 .profile-form select { max-width: 16rem; }
-.profile-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 1rem; }
+.profile-actions { display: flex; flex-flow: row wrap; align-items: flex-start; gap: 0.8rem 1rem; }
 .resume-badge { position: absolute; top: 0.4rem; left: 0.4rem; z-index: 1; padding: 0.15rem 0.4rem; border-radius: 0.3rem; background: rgb(0 0 0 / 0.85); font-size: 0.75rem; }
 .hints { flex-wrap: wrap; gap: 0.6rem 1.3rem; }
 
-.pairing { display: flex; align-items: center; gap: 2rem; margin: 1rem 0; }
-.pairing img { background: #fff; border-radius: 0.5rem; width: 10rem; height: 10rem; }
+.pairing { display: flex; align-items: flex-start; gap: 2rem; margin: 0.5rem 0 1rem; padding: 1rem; border-radius: 0.8rem; background: var(--surface); }
+.pairing img { flex: none; background: #fff; border-radius: 0.5rem; width: 11rem; height: 11rem; }
+.pairing-text { display: grid; gap: 1rem; min-width: 0; flex: 1; }
+.pairing-text p { margin: 0; color: var(--muted); }
+.pairing-url { font-size: 0.7rem; overflow-wrap: anywhere; opacity: 0.7; }
+.pairing-confirm { display: grid; gap: 0.6rem; padding: 1rem 1.2rem; border-left: 0.3rem solid var(--accent); border-radius: 0.6rem; background: var(--surface-2); }
+.pairing-confirm > p { color: var(--text); }
+.pairing-code { font-size: 3rem; letter-spacing: 0.15em; line-height: 1.1; }
+.pairing-buttons { display: flex; gap: 1rem; }
+.pairing-buttons button { background: var(--surface); }
+.pairing .pairing-ok { color: #8fe3a8; font-weight: 600; }

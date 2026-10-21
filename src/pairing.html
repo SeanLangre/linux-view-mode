@@ -10,9 +10,16 @@
   button { font-size: 18px; padding: 12px 16px; margin: 4px 4px 4px 0; }
   fieldset { border: 1px solid #444; margin: 16px 0; padding: 8px 12px 12px; }
   #msg { min-height: 1.5em; color: #f99; }
+  #code { font-size: 48px; letter-spacing: 0.1em; margin: 8px 0; }
+  fieldset:disabled { opacity: 0.4; }
 </style>
 <h1>Sign in on the TV</h1>
+<section id="confirm">
+  <p>Check that the TV shows this code, then press <b>Yes</b> on the TV. <b>Confirm the code on the TV before you continue to Google.</b></p>
+  <div id="code" aria-live="polite">…</div>
+</section>
 <p>Do each step when the TV shows the matching page. If you mistype, you can send a step up to 3 times; after that use the TV keyboard.</p>
+<p>What you type is encrypted on the way to the TV, but this page can't prove the network hasn't tampered with it. <b>On shared Wi-Fi, use the TV keyboard instead.</b></p>
 <p id="msg" role="status"></p>
 
 <form id="email-form" class="step" data-step="email">
@@ -43,32 +50,94 @@
     <button type="submit">Type code on the TV</button>
   </fieldset>
 </form>
+<script>/*NACL*/</script>
 <script>
   const msg = document.getElementById('msg')
   const say = (text, ok) => { msg.style.color = ok ? '#9f9' : '#f99'; msg.textContent = text }
-  for (const form of document.querySelectorAll('.step')) {
-    const input = form.querySelector('input'), button = form.querySelector('button')
-    input.setAttribute('aria-describedby', 'msg')
-    form.onsubmit = async (e) => {
-      e.preventDefault()
-      button.disabled = true
-      msg.style.color = '#9cf'; msg.textContent = 'Typing on the TV…'
+  const hex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  const unhex = (text) => Uint8Array.from(text.match(/../g) ?? [], (h) => parseInt(h, 16))
+  const store = (name, value) => { try { if (value === undefined) return sessionStorage.getItem(name); sessionStorage.setItem(name, value) } catch { return null } }
+  const forms = Array.from(document.querySelectorAll('.step'))
+  const lock = (locked) => { for (const form of forms) form.querySelector('fieldset').disabled = locked }
+  lock(true)
+
+  // The key arrives in the #fragment, which browsers never send. Drop it from the address bar and
+  // history; keep it for this tab only, so a reload still works.
+  const fromHash = location.hash.slice(1)
+  if (/^[0-9a-f]{64}$/.test(fromHash)) { store('key', fromHash); history.replaceState(null, '', location.pathname) }
+  const keyHex = store('key')
+  if (!/^[0-9a-f]{64}$/.test(keyHex ?? '')) {
+    say('Scan the QR code on the TV (the link must include everything after #).', false)
+  } else {
+    start(unhex(keyHex))
+  }
+
+  function start(key) {
+    const enc = new TextEncoder(), dec = new TextDecoder()
+    let phone = store('phone')
+    if (!/^[0-9a-f]{32}$/.test(phone ?? '')) { phone = hex(nacl.randomBytes(16)); store('phone', phone) }
+    let seq = Number(store('seq')) || 0
+    const seal = (fields) => {
+      const nonce = nacl.randomBytes(24)
+      return { n: hex(nonce), c: hex(nacl.secretbox(enc.encode(JSON.stringify({ phone, ...fields })), nonce, key)) }
+    }
+    const post = (path, body) => fetch(location.pathname + path, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })
+    const errorOf = async (res) => (await res.json().catch(() => null))?.error ?? 'failed'
+    const codeBox = document.getElementById('code')
+
+    async function hello() {
       try {
-        const res = await fetch(location.pathname + '/' + form.dataset.step, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: input.value }),
-        })
-        if (res.ok) {
-          input.value = ''
-          button.disabled = false
-          say('Sent step ' + form.dataset.step + '. Check the TV.', true)
-        } else {
-          button.disabled = res.status === 409
-          say((await res.json().catch(() => null))?.error ?? 'failed', false)
-        }
+        const res = await post('/hello', seal({ step: 'hello', seq: 0 }))
+        if (!res.ok) { say(await errorOf(res), false); return }
+        const reply = await res.json()
+        const plain = nacl.secretbox.open(unhex(reply.c), unhex(reply.n), key)
+        if (!plain) { say('This link is out of date: scan the QR code again.', false); return }
+        const code = JSON.parse(dec.decode(plain)).code
+        codeBox.textContent = code.slice(0, 3) + ' ' + code.slice(3)
+        codeBox.setAttribute('aria-label', code.split('').join(' '))
+        poll()
       } catch {
-        button.disabled = false
         say("Couldn't reach the TV. Are you on the same Wi-Fi?", false)
+      }
+    }
+
+    let confirmed = false
+    async function poll() {
+      try {
+        const res = await fetch(location.pathname + '/status?phone=' + phone)
+        if (!res.ok) { say(await errorOf(res), false); return }
+        const { state } = await res.json()
+        if (state === 'confirmed' && !confirmed) { confirmed = true; lock(false); say('Confirmed. Continue to Google on the TV.', true) }
+        if (state === 'none') { lock(true); say('Another phone took over this link. Scan the QR code again.', false); return }
+      } catch { /* keep polling */ }
+      setTimeout(poll, 1000)
+    }
+    hello()
+
+    for (const form of forms) {
+      const input = form.querySelector('input'), button = form.querySelector('button')
+      input.setAttribute('aria-describedby', 'msg')
+      form.onsubmit = async (e) => {
+        e.preventDefault()
+        button.disabled = true
+        msg.style.color = '#9cf'; msg.textContent = 'Typing on the TV…'
+        try {
+          store('seq', ++seq)
+          const res = await post('/' + form.dataset.step, seal({ step: form.dataset.step, seq, text: input.value }))
+          if (res.ok) {
+            input.value = ''
+            button.disabled = false
+            say('Sent step ' + form.dataset.step + '. Check the TV.', true)
+          } else {
+            button.disabled = res.status === 409
+            say(await errorOf(res), false)
+          }
+        } catch {
+          button.disabled = false
+          say("Couldn't reach the TV. Are you on the same Wi-Fi?", false)
+        }
       }
     }
   }

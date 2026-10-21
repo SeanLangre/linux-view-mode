@@ -86,9 +86,11 @@ export const signin = async (id: string) => {
 }
 export const loginStatus = (id: string, check = false) =>
   playback<LoginStatus>(`profiles/${encodeURIComponent(id)}/status${check ? '?check=true' : ''}`)
-export type Pairing = { url: string; svg: string }
+export type Pairing = { url: string; svg: string; code: string | null; confirmed: boolean }
 export const pairing = () => playback<Pairing>('pairing')
 export const startPairing = () => playback<Pairing>('pairing', {})
+export const confirmPairing = (code: string) => playback<{ status: string }>('pairing/confirm', { code })
+export const rejectPairing = () => playback<{ status: string }>('pairing/reject', {})
 export const cancelPairing = () => fetch('/api/pairing', { method: 'DELETE' }).then(() => undefined, () => undefined)
 export async function removeProfile(id: string) {
   const response = await fetch(`/api/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' })

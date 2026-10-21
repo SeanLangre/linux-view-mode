@@ -10,7 +10,7 @@ Checklist for [`plan.md`](plan.md). Tick items as they're done; move finished se
 
 ## Sign-in follow-ups (second review, 2026-10-21)
 
-- [ ] Encrypt the phone form against passive Wi-Fi sniffing: one-time key in the QR URL `#fragment`, inline crypto (e.g. tweetnacl; no WebCrypto on plain HTTP). Remaining main risk
+- [x] (done 2026-10-21; the manual `tcpdump` and second-phone test in `encryption-plan.md` is still to run) Encrypt the phone form against passive Wi-Fi sniffing: one-time key in the QR URL `#fragment`, inline crypto (e.g. tweetnacl; no WebCrypto on plain HTTP). Remaining main risk
 - [ ] (Accepted, low) `type_and_enter`: the second focus check only guards Enter; if focus moves mid-typing (up to ~3 s for 256 characters) the text already went elsewhere
 
 ## Alternative login tests (`alternative_login.md`; wording is already in the UI and docs, results decide what stays)
