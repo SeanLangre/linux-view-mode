@@ -116,7 +116,13 @@ impl Player {
             ended: VecDeque::new(),
         }))))
     }
-    pub async fn play(&self, id: &str, start: Option<f64>, firefox: Option<&Path>) -> Result<u64> {
+    pub async fn play(
+        &self,
+        id: &str,
+        start: Option<f64>,
+        firefox: Option<&Path>,
+        subtitles: Option<&str>,
+    ) -> Result<u64> {
         if !crate::ytdlp::is_video_id(id) || start.is_some_and(|v| !v.is_finite() || v < 0.0) {
             bail!("invalid video id or start position");
         }
@@ -149,6 +155,21 @@ impl Player {
                 folder.display()
             ));
         }
+        match subtitles {
+            Some(language) if crate::profiles::valid_language(language) => {
+                // yt-dlp fetches the track (manual, else automatic); mpv shows it.
+                command
+                    .arg("--ytdl-raw-options-append=write-subs=")
+                    .arg("--ytdl-raw-options-append=write-auto-subs=")
+                    .arg(format!("--ytdl-raw-options-append=sub-langs={language}.*,{language}"))
+                    .arg(format!("--slang={language}"))
+                    .arg("--sid=auto");
+            }
+            Some(_) => bail!("invalid subtitle language"),
+            None => {
+                command.arg("--sid=no");
+            }
+        }
         if let Some(start) = start {
             command.arg(format!("--start={start}"));
         }
@@ -179,6 +200,28 @@ impl Player {
     }
     pub async fn stop(&self) -> Result<()> {
         self.0.lock().await.stop().await
+    }
+    /// Send one command to the running mpv over a second IPC connection (mpv accepts several).
+    pub async fn command(&self, command: &[Value]) -> Result<()> {
+        let socket = {
+            let inner = self.0.lock().await;
+            inner
+                .running
+                .as_ref()
+                .context("nothing is playing")?
+                .directory
+                .join("ipc")
+        };
+        let line = format!("{}\n", json!({ "command": command }));
+        let send = async {
+            let mut stream = UnixStream::connect(&socket).await?;
+            stream.write_all(line.as_bytes()).await?;
+            stream.flush().await
+        };
+        tokio::time::timeout(Duration::from_secs(2), send)
+            .await
+            .context("mpv did not answer")?
+            .context("could not send the command to mpv")
     }
     pub async fn status(&self) -> Result<Status> {
         let mut inner = self.0.lock().await;
@@ -370,14 +413,14 @@ mod tests {
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
         let player = Player::new("config/mpv".into()).unwrap();
         player.0.lock().await.executable = executable.clone();
-        player.play("aqz-KE-bpKQ", Some(12.0), None).await.unwrap();
+        player.play("aqz-KE-bpKQ", Some(12.0), None, None).await.unwrap();
         let (first_pid, first_socket_dir) = {
             let inner = player.0.lock().await;
             let running = inner.running.as_ref().unwrap();
             (running.child.id().unwrap(), running.directory.clone())
         };
         assert!(player.status().await.unwrap().playing);
-        player.play("rFZHOHl-L8A", None, None).await.unwrap();
+        player.play("rFZHOHl-L8A", None, None, None).await.unwrap();
         assert!(!PathBuf::from(format!("/proc/{first_pid}")).exists());
         assert!(!first_socket_dir.exists());
         assert_eq!(
@@ -388,7 +431,7 @@ mod tests {
         player.stop().await.unwrap();
         assert!(!player.status().await.unwrap().playing);
         std::fs::write(&executable, "#!/bin/sh\nexit 1\n").unwrap();
-        player.play("aqz-KE-bpKQ", None, None).await.unwrap();
+        player.play("aqz-KE-bpKQ", None, None, None).await.unwrap();
         tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 let status = player.status().await.unwrap();
@@ -408,14 +451,15 @@ mod tests {
     #[tokio::test]
     async fn rejects_invalid_playback_before_spawning() {
         let player = Player::new("config/mpv".into()).unwrap();
-        assert!(player.play("--bad", None, None).await.is_err());
-        assert!(player.play("aqz-KE-bpKQ", Some(-1.0), None).await.is_err());
+        assert!(player.play("--bad", None, None, None).await.is_err());
+        assert!(player.play("aqz-KE-bpKQ", Some(-1.0), None, None).await.is_err());
         assert!(
             player
-                .play("aqz-KE-bpKQ", Some(f64::INFINITY), None)
+                .play("aqz-KE-bpKQ", Some(f64::INFINITY), None, None)
                 .await
                 .is_err()
         );
+        assert!(player.play("aqz-KE-bpKQ", None, None, Some("en;rm")).await.is_err());
         assert!(!player.status().await.unwrap().playing);
         player.stop().await.unwrap();
     }

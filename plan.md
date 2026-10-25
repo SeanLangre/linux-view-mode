@@ -81,7 +81,7 @@ How to run the code is in `README.md`; the working checklist is `TODO.md`.
 1. "Add account" in the UI → backend opens a separate Firefox window (X11 mode, `MOZ_ENABLE_WAYLAND=0`):
    `firefox --new-instance --no-remote --profile <dir> https://accounts.google.com/ServiceLogin?continue=https://www.youtube.com`
    The login page in the app shows the phone-pairing QR code first. Firefox opens straight on Google (no local start page) when the user presses **Yes, that's my phone** after checking the code, or **Open Firefox sign-in** to use the TV keyboard. Open question: Google asked for a 2FA code instead of a tap after this change; the only difference is the missing local `Referer` and click path (see `TODO.md`).
-2. Sign in with the phone keyboard (see below) or the TV keyboard. If the account already offers a passkey or phone prompt under Google's "Try another way" (see `alternative_login.md`), the user can use that instead; CouchTube doesn't require or ask for any account change. On the first real test the account offered nothing but the password, so phone keyboard plus encryption (`encryption-plan.md`) stays the main path. Whichever way, the cookies are the same and the window closes as in step 3.
+2. Sign in with the phone keyboard (see below) or the TV keyboard. Phone keyboard plus encryption (`encryption-plan.md`) is the main path; the cookies are the same either way and the window closes as in step 3.
 3. The backend polls the profile's `cookies.sqlite` (a copy, since Firefox holds it open) every 2 s. Once YouTube's `LOGIN_INFO` cookie has been seen three times in a row, it closes Firefox so the cookies are flushed.
 4. Backend checks the login works by fetching one item of `:ytsubs`. The profile shows a ✓ or "Sign in again".
 
@@ -290,11 +290,11 @@ Written (`deploy/`, `POST /api/system/exit`, Home menu item); not yet run on the
 - "Exit to desktop" item, and a KDE global shortcut to start the kiosk again.
 - **Done when:** the TV boots into "Who's watching?", and killing Firefox brings it back.
 
-### Phase 7 — Polish (pick as needed)
+### Phase 7 — Polish (implemented 2026-10-25; real-hardware checks in `TODO.md`)
 - **YouTube TV fallback tile**: opens youtube.com/tv fullscreen in the active profile's Firefox (TV user agent, uBlock Origin + SponsorBlock). For liking/subscribing, or when yt-dlp is broken.
 - Subtitles: language per profile.
 - HDMI-CEC power control, if the hardware supports it.
-- Phone remote over the LAN, only with authentication.
+- Phone remote over the LAN: off by default, QR pairing confirmed on the TV, per-phone bearer token (`src/remote.rs`).
 
 ---
 

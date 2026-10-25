@@ -11,6 +11,7 @@ type Screen =
   | { kind: 'channel'; id: string; name: string | null }
   | { kind: 'feed'; feed: api.FeedKind }
   | { kind: 'queue' }
+  | { kind: 'remote' }
 
 /** One level of the back stack. Focus is kept per level so Back returns to the same card. */
 type Entry = { screen: Screen; focus: Focus }
@@ -26,8 +27,16 @@ const HOME_MENU = [
   { label: 'Recommended', action: 'recommended' }, { label: 'Subscriptions', action: 'subscriptions' },
   { label: 'History', action: 'history' }, { label: 'Watch later', action: 'watchlater' },
   { label: 'Liked', action: 'liked' }, { label: 'Queue', action: 'queue' },
+  { label: 'Subtitles', action: 'subtitles' },
+  { label: 'YouTube TV', action: 'youtube-tv' },
+  { label: 'Phone remote', action: 'remote' },
+  { label: 'Turn TV off', action: 'tv-off' },
   { label: 'Exit to desktop', action: 'exit' },
 ]
+/** The Subtitles menu entry toggles between off (`null`) and English. */
+const SUBTITLE_LANGUAGES: (string | null)[] = [null, 'en']
+const languageName = (code: string | null) =>
+  code === null ? 'Off' : new Intl.DisplayNames(['en'], { type: 'language' }).of(code) ?? code
 /** Menu entries that need a signed-in YouTube account. */
 const ACCOUNT_ACTIONS = ['recommended', 'subscriptions', 'watchlater', 'liked']
 const FEED_NAMES: Record<api.FeedKind, string> = {
@@ -56,6 +65,11 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
     if (profile.id === 'guest') return
     api.loginStatus(profile.id).then((status) => setLoginExpired(status.state === 'sign_in_again'), () => {})
   }, [profile.id])
+  const [subtitles, setSubtitles] = useState(profile.subtitles)
+  // Only offer "Turn TV off" when the server has an HDMI-CEC tool and device.
+  const [cec, setCec] = useState(false)
+  useEffect(() => { api.tvPowerAvailable().then((r) => setCec(r.available), () => {}) }, [])
+  const [remote, setRemote] = useState<api.RemoteInfo | null>(null)
   const refreshRequested = useRef(false)
   const [feedback, setFeedback] = useState<string | null>(null)
   const feedbackTimer = useRef<number | undefined>(undefined)
@@ -131,7 +145,9 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
       case 'home':
         return [
           { kind: 'search-button' },
-          { kind: 'menu', items: hasAccount ? HOME_MENU : HOME_MENU.filter((item) => !ACCOUNT_ACTIONS.includes(item.action)) },
+          { kind: 'menu', items: (hasAccount ? HOME_MENU : HOME_MENU.filter((item) => !ACCOUNT_ACTIONS.includes(item.action)))
+            .filter((item) => cec || item.action !== 'tv-off')
+            .map((item) => item.action === 'subtitles' ? { ...item, label: `Subtitles: ${languageName(subtitles)}` } : item) },
           ...data.rows,
           ...(recent.length > 0
             ? [{ kind: 'chips', title: 'Recent searches', items: recent } as const]
@@ -139,13 +155,21 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
         ]
       case 'search':
         return [{ kind: 'search-input' }, ...data.rows]
+      case 'remote': {
+        const items = !remote?.enabled ? [{ label: 'Turn on', action: 'remote-on' }]
+          : remote.code && !remote.confirmed ? [{ label: 'Yes, that’s my phone', action: 'remote-yes' }, { label: 'No', action: 'remote-no' }]
+          : [{ label: remote.url ? 'New link' : 'Pair a phone', action: 'remote-pair' },
+            ...(remote.devices > 0 ? [{ label: `Forget ${remote.devices} phone${remote.devices === 1 ? '' : 's'}`, action: 'remote-forget' }] : []),
+            { label: 'Turn off', action: 'remote-off' }]
+        return [{ kind: 'menu', items }]
+      }
       case 'queue':
         return [{ kind: 'menu', items: [{ label: 'Play next', action: 'next' }, { label: 'Clear queue', action: 'clear' }] }, ...data.rows]
       case 'feed':
       case 'channel':
         return data.rows
     }
-  }, [screen.kind, recent, data.rows, hasAccount])
+  }, [screen.kind, recent, data.rows, hasAccount, subtitles, cec, remote])
 
   const specs: RowSpec[] = rows.map((row) => ({
     length: rowLength(row),
@@ -173,6 +197,30 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
     else setStack((s) => s.slice(0, -1))
   }
   const goHome = () => setStack((s) => [s[0]])
+
+  // The remote screen shows the pairing QR code and watches for a phone saying hello.
+  useEffect(() => {
+    if (screen.kind !== 'remote') { setRemote(null); return }
+    let cancelled = false
+    let timer: number
+    async function poll() {
+      try { const info = await api.remoteInfo(); if (!cancelled) setRemote(info) } catch { /* keep the last state */ }
+      if (!cancelled) timer = window.setTimeout(poll, 1000)
+    }
+    void poll()
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [screen.kind])
+
+  async function remoteAction(action: string) {
+    try {
+      if (action === 'remote-on') setRemote(await api.setRemote(true))
+      else if (action === 'remote-off') setRemote(await api.setRemote(false))
+      else if (action === 'remote-pair') setRemote(await api.remotePair())
+      else if (action === 'remote-forget') { await api.forgetPhones(); setRemote(await api.remoteInfo()) }
+      else if (action === 'remote-yes' && remote?.code) { await api.remoteConfirm(remote.code); setRemote(await api.remoteInfo()) }
+      else if (action === 'remote-no') { await api.remoteReject(); setRemote(await api.remotePair()) }
+    } catch (err) { notify((err as Error).message) }
+  }
 
   function openSearch() {
     if (screen.kind === 'search') setFocus(START)
@@ -232,7 +280,15 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
       case 'menu': {
         const action = focusedRow.items[focus.col]?.action
         if (action === 'queue') push({ kind: 'queue' })
-        else if (action === 'exit') void api.exitToDesktop().catch((err: Error) => notify(err.message))
+        else if (action === 'remote') push({ kind: 'remote' })
+        else if (action?.startsWith('remote-')) void remoteAction(action)
+        else if (action === 'youtube-tv') void api.youtubeTv().then(() => notify('YouTube TV is opening. Close its window (Alt+F4) to come back.'), (err: Error) => notify(err.message))
+        else if (action === 'tv-off') void api.tvPower(false).then(() => notify('Turning the TV off…'), (err: Error) => notify(err.message))
+        else if (action === 'subtitles') {
+          const known = SUBTITLE_LANGUAGES.includes(subtitles) ? SUBTITLE_LANGUAGES : [...SUBTITLE_LANGUAGES, subtitles]
+          const language = known[(known.indexOf(subtitles) + 1) % known.length]
+          api.setSubtitles(profile.id, language).then((saved) => setSubtitles(saved.subtitles), (err: Error) => notify(err.message))
+        } else if (action === 'exit') void api.exitToDesktop().catch((err: Error) => notify(err.message))
         else if (action === 'next' || action === 'clear') void queueAction(action)
         else if (action) push({ kind: 'feed', feed: action as api.FeedKind })
         break
@@ -355,6 +411,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
       {screen.kind === 'home' && <h1 className="page-title">What do you want to watch?</h1>}
       {screen.kind === 'feed' && <h1 className="page-title">{FEED_NAMES[screen.feed]}</h1>}
       {screen.kind === 'queue' && <h1 className="page-title">Up next</h1>}
+      {screen.kind === 'remote' && <h1 className="page-title">Phone remote</h1>}
       {screen.kind === 'channel' && <h1 className="page-title">{screen.name ?? 'Channel'}</h1>}
 
       {rows.map((row, r) => (
@@ -368,6 +425,24 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
           onSubmit={() => runSearch(draft)}
         />
       ))}
+
+      {screen.kind === 'remote' && remote && (
+        <section className="pairing">
+          {remote.svg && <img alt="QR code for pairing a phone with the remote" src={`data:image/svg+xml;utf8,${encodeURIComponent(remote.svg)}`} />}
+          <div className="pairing-text">
+            {!remote.enabled ? <p>The remote is off. Turn it on to control playback and the queue from a phone on this network.</p>
+              : remote.code && !remote.confirmed ? <div className="pairing-confirm" role="alert">
+                <p>A phone connected. Does it show this code?</p>
+                <strong className="pairing-code">{remote.code.slice(0, 3)} {remote.code.slice(3)}</strong>
+              </div>
+              : remote.url ? <>
+                <p>{remote.confirmed ? '✓ Phone paired. Choose New link to pair another.' : 'Scan with your phone (same Wi-Fi). The link works once for 10 minutes.'}</p>
+                <p className="pairing-url">{remote.url}</p>
+              </>
+              : <p>{remote.devices > 0 ? `${remote.devices} phone${remote.devices === 1 ? ' is' : 's are'} paired. Choose Pair a phone to add another.` : 'No phone is paired yet. Choose Pair a phone.'} Use it on a network you trust.</p>}
+          </div>
+        </section>
+      )}
 
       {(data.loading || data.loadingMore) && <SkeletonRow />}
       {!data.loading && !data.error && !data.rows.some((row) => row.kind === 'videos' && row.videos.length > 0) && (
@@ -673,6 +748,7 @@ function screenKey(screen: Screen): string {
     case 'search':
       return `search:${screen.query}`
     case 'queue': return 'queue'
+    case 'remote': return 'remote'
     case 'feed': return `feed:${screen.feed}`
     case 'channel':
       return `channel:${screen.id}`
@@ -686,6 +762,7 @@ function crumb(screen: Screen): string {
     case 'search':
       return 'Search'
     case 'queue': return 'Queue'
+    case 'remote': return 'Phone remote'
     case 'feed': return FEED_NAMES[screen.feed]
     case 'channel':
       return 'Channel'

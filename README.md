@@ -58,6 +58,8 @@ and open `http://127.0.0.1:5173`. Vite forwards `/api` calls to the backend (wit
 |---|---|---|
 | `COUCHTUBE_PORT` | `7878` | Port to listen on (always `127.0.0.1` only) |
 | `COUCHTUBE_PAIR_PORT` | `7879` | Port for the phone keyboard used during sign-in (listens on all interfaces, see below) |
+| `COUCHTUBE_REMOTE_PORT` | `7880` | Port for the phone remote; opened on all interfaces only while the remote is switched on (see below) |
+| `COUCHTUBE_CEC_DEVICE` | `/dev/cec0` | HDMI-CEC device used by `cec-ctl` for **Turn TV off** |
 | `COUCHTUBE_FRONTEND` | `frontend/dist` | Folder with the built frontend |
 | `COUCHTUBE_MPV_CONFIG` | `config/mpv` | mpv config directory, including scripts (relative to the backend working directory) |
 | `COUCHTUBE_DATA_DIR` | `$XDG_DATA_HOME/couchtube` or `~/.local/share/couchtube` | Private SQLite database and account Firefox profiles |
@@ -110,6 +112,13 @@ Automated checks use simulated accounts and watched-history requests. Checked wi
 
 `config/firefox/user.js` is copied into account profiles automatically. The supplied extension policy installs uBlock Origin and SponsorBlock when deployed to Firefox’s system policy directory. To enable it on this dev machine, first review the file and any existing `/etc/firefox/policies/policies.json`, then merge or install it there and restart Firefox. CouchTube does not change system Firefox policies automatically. See [Mozilla’s ExtensionSettings reference](https://firefox-admin-docs.mozilla.org/reference/policies/extensionsettings/).
 
+## Subtitles, YouTube TV, TV power and the phone remote
+
+- **Subtitles**: **Subtitles** in the Home menu toggles the profile's subtitles between Off and English. mpv then asks yt-dlp for that language (manual subtitles first, else automatic captions) and shows it; **C** in mpv cycles the tracks. Off by default.
+- **YouTube TV**: **YouTube TV** in the Home menu opens youtube.com/tv in a fullscreen Firefox as the active profile (so it is signed in, with uBlock Origin from the policy). Firefox gets a TV user agent for this window only. Close it with **Alt+F4** to come back. Use it to like or subscribe, or when yt-dlp breaks.
+- **Turn TV off**: shown in the Home menu only when `cec-client` (libcec) or `cec-ctl` (v4l-utils) and a `/dev/cec*` device exist. Most PC graphics cards have no CEC; a Pulse-Eight USB adapter does.
+- **Phone remote**: **Phone remote** in the Home menu → **Turn on**, then **Pair a phone**. Scan the QR code, check the phone shows the same code as the TV, and choose **Yes**. The phone then controls pause, seek, volume, mute, subtitles, next and stop, shows the queue, and can play or queue a pasted YouTube link. The port (`7880`) is closed until you turn the remote on. Each phone keeps a random token; the server stores only its hash, and **Forget phones** revokes all of them. It is plain HTTP, so anyone on your Wi-Fi who sniffs the traffic can copy a phone's token. Use it only on a network you trust.
+
 ## Keys
 
 | Key | Action |
@@ -151,8 +160,14 @@ If it happens again, note the video ID, whether the picture freezes or breaks up
 | POST | `/api/profiles/<id>/select` | Selects a profile and stops playback |
 | POST | `/api/profiles/<id>/signin` | Opens that profile’s Firefox sign-in window |
 | GET/POST/DELETE | `/api/pairing` | Phone URL and QR code (SVG) while a sign-in is in progress, otherwise 404; POST starts it before Firefox opens (the login page does this when it opens), DELETE cancels it if no window is open |
+| PUT | `/api/profiles/<id>/subtitles` | Body `{language}` (`en`, `pt-BR`, …; `null` = off); saved per profile and used for every video |
 | GET | `/api/profiles/<id>/status` | `{state, message}`; `?check=true` starts a login check |
 | POST | `/api/system/exit` | Stops the kiosk service (only when it runs as the systemd unit) |
+| POST | `/api/system/youtube-tv` | Opens youtube.com/tv in a Firefox window as the active profile (409 while a Firefox window for it is open) |
+| GET/POST | `/api/system/tv` | GET `{available}` (a CEC tool and device exist); POST `{on}` switches the TV on or to standby over HDMI-CEC |
+| GET/PUT | `/api/remote` | Phone remote state `{enabled, devices, url, svg, code, confirmed}`; PUT `{enabled}` opens or closes its LAN port |
+| POST | `/api/remote/pair`, `/confirm`, `/reject` | Start a pairing link (10 minutes, one use), accept the phone's code `{code}`, or refuse it |
+| DELETE | `/api/remote/devices` | Forget every paired phone |
 | GET | `/api/health` | `{"status":"ok"}` |
 | GET | `/api/feed/<kind>` | Video list: `continue`, `recommended`, `subscriptions`, `history`, `watchlater`, `liked`; `?refresh=true` bypasses the feed cache |
 | GET | `/api/queue` | Active profile’s queue in playback order |

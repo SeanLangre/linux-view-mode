@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CouchTube remote</title>
+<style>
+  body { font: 18px system-ui, sans-serif; margin: 0; padding: 16px; background: #111; color: #eee; }
+  h1 { font-size: 22px; margin: 0 0 8px; }
+  button { font-size: 20px; padding: 14px 8px; margin: 0; border: 0; border-radius: 10px; background: #2d3340; color: #eee; }
+  button:active { background: #4a5266; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0; }
+  .wide { grid-column: span 3; }
+  #title { font-weight: 600; min-height: 1.4em; }
+  #time, #msg, #who { color: #9aa3b5; }
+  #msg { min-height: 1.4em; color: #f99; }
+  #code { font-size: 48px; letter-spacing: 0.1em; margin: 8px 0; }
+  input { width: 100%; box-sizing: border-box; font-size: 18px; padding: 12px; margin: 4px 0; }
+  ul { list-style: none; padding: 0; margin: 8px 0; }
+  li { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid #2d3340; }
+  li span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  li button { padding: 8px 12px; font-size: 16px; }
+  [hidden] { display: none !important; }
+</style>
+<h1>CouchTube remote</h1>
+<p id="msg" role="status"></p>
+
+<section id="pair" hidden>
+  <p>Check that the TV shows this code, then press <b>Yes</b> on the TV.</p>
+  <div id="code" aria-live="polite">…</div>
+</section>
+<section id="nopair" hidden>
+  <p>This phone isn't paired. On the TV open <b>Phone remote</b> in the Home menu and scan its QR code.</p>
+</section>
+
+<section id="remote" hidden>
+  <div id="who"></div>
+  <div id="title">Nothing playing</div>
+  <div id="time"></div>
+  <div class="grid">
+    <button data-cmd="seek" data-value="-60">⏪ 1 min</button>
+    <button data-cmd="pause">⏯ Pause</button>
+    <button data-cmd="seek" data-value="60">1 min ⏩</button>
+    <button data-cmd="seek" data-value="-10">↺ 10 s</button>
+    <button data-cmd="next">⏭ Next</button>
+    <button data-cmd="seek" data-value="10">10 s ↻</button>
+    <button data-cmd="volume" data-value="-5">🔉 −</button>
+    <button data-cmd="mute">🔇 Mute</button>
+    <button data-cmd="volume" data-value="5">🔊 +</button>
+    <button data-cmd="subtitles">CC</button>
+    <button data-cmd="stop" class="wide">⏹ Stop</button>
+  </div>
+  <form id="add">
+    <input id="link" type="url" inputmode="url" placeholder="Paste a YouTube link" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <div class="grid">
+      <button type="submit" data-cmd="play" class="wide">Play now</button>
+      <button type="submit" data-cmd="enqueue" class="wide">Add to queue</button>
+    </div>
+  </form>
+  <h2>Queue</h2>
+  <ul id="queue"></ul>
+  <button data-cmd="clear">Clear queue</button>
+</section>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id)
+  const KEY = 'couchtube-remote-device'
+  const get = (k) => { try { return localStorage.getItem(k) } catch { return null } }
+  const set = (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v) } catch {} }
+  const say = (text) => { $('msg').textContent = text }
+  const show = (name) => { for (const id of ['pair', 'nopair', 'remote']) $(id).hidden = id !== name }
+  const post = async (path, body, device) => {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(device ? { Authorization: `Bearer ${device}` } : {}) },
+      body: JSON.stringify(body),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw Object.assign(new Error(data.error || `request failed (${res.status})`), { status: res.status })
+    return data
+  }
+  const clock = (s) => { s = Math.floor(s || 0); const m = Math.floor(s / 60); return `${m}:${String(s % 60).padStart(2, '0')}` }
+
+  async function pairing(token) {
+    show('pair')
+    const phone = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('')
+    try {
+      const { code } = await post('/pair/hello', { token, phone })
+      $('code').textContent = `${code.slice(0, 3)} ${code.slice(3)}`
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1000))
+        const reply = await post('/pair/poll', { token, phone })
+        if (reply.device) { set(KEY, reply.device); history.replaceState(null, '', '/'); return control() }
+      }
+    } catch (err) { show('nopair'); say(err.message) }
+  }
+
+  let device
+  async function refresh() {
+    const res = await fetch('/state', { headers: { Authorization: `Bearer ${device}` }, cache: 'no-store' })
+    if (res.status === 401) { set(KEY, null); show('nopair'); say('This phone was forgotten on the TV.'); return false }
+    if (!res.ok) { say('The TV did not answer.'); return true }
+    const { status, profile, queue } = await res.json()
+    say('')
+    $('who').textContent = `Watching as ${profile}`
+    $('title').textContent = status.playing ? (status.title || 'Loading…') : 'Nothing playing'
+    $('time').textContent = status.playing && status.duration ? `${status.paused ? '⏸ ' : ''}${clock(status.position)} / ${clock(status.duration)}` : ''
+    const list = $('queue')
+    list.replaceChildren(...queue.map((v) => {
+      const li = document.createElement('li')
+      const name = document.createElement('span')
+      name.textContent = v.title || v.id
+      const play = document.createElement('button')
+      play.textContent = '▶'
+      play.onclick = () => send('play', v.id)
+      const remove = document.createElement('button')
+      remove.textContent = '✕'
+      remove.onclick = () => send('dequeue', v.id)
+      li.append(name, play, remove)
+      return li
+    }))
+    return true
+  }
+  async function send(cmd, value) {
+    try { await post('/cmd', { cmd, value }, device); say('') } catch (err) { say(err.message) }
+    refresh()
+  }
+  function control() {
+    device = get(KEY)
+    if (!device) return show('nopair')
+    show('remote')
+    ;(async () => { while (await refresh()) await new Promise((r) => setTimeout(r, 2000)) })()
+  }
+
+  document.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-cmd]')
+    if (!button || button.type === 'submit') return
+    send(button.dataset.cmd, button.dataset.value === undefined ? undefined : Number(button.dataset.value))
+  })
+  $('add').addEventListener('submit', (event) => {
+    event.preventDefault()
+    const link = $('link').value.trim()
+    if (!link) return
+    send(event.submitter.dataset.cmd, link)
+    $('link').value = ''
+  })
+
+  const token = location.pathname.startsWith('/r/') ? location.pathname.slice(3) : null
+  if (token) pairing(token)
+  else control()
+})()
+</script>

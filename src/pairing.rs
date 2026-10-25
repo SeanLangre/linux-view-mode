@@ -339,7 +339,7 @@ impl Pairing {
 }
 
 /// The address the phone should use: the one the OS routes outward from (no packets are sent).
-fn lan_address() -> Result<std::net::IpAddr> {
+pub(crate) fn lan_address() -> Result<std::net::IpAddr> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
     socket.connect("192.0.2.1:9").context("no network route")?;
     Ok(socket.local_addr()?.ip())
@@ -363,7 +363,7 @@ struct Message {
     text: String,
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -377,7 +377,7 @@ fn unhex(text: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
-async fn random_bytes<const N: usize>() -> Result<[u8; N]> {
+pub(crate) async fn random_bytes<const N: usize>() -> Result<[u8; N]> {
     let mut bytes = [0u8; N];
     tokio::fs::File::open("/dev/urandom")
         .await?

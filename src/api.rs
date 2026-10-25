@@ -22,6 +22,7 @@ pub struct AppState {
     pub playback: crate::playback::Playback,
     pub feeds: crate::feeds::Feeds,
     pub profiles: Profiles,
+    pub remote: crate::remote::Remote,
     pub transition: Arc<Mutex<()>>,
 }
 
@@ -37,12 +38,20 @@ pub fn router(state: AppState) -> Router {
         .route("/profiles", get(list_profiles).post(create_profile))
         .route("/profiles/{id}", axum::routing::delete(remove_profile))
         .route("/profiles/{id}/select", post(select_profile))
+        .route("/profiles/{id}/subtitles", axum::routing::put(set_subtitles))
         .route("/profiles/{id}/signin", post(signin))
         .route("/profiles/{id}/status", get(login_status))
         .route("/system/exit", post(exit_to_desktop))
+        .route("/system/youtube-tv", post(youtube_tv))
+        .route("/system/tv", get(tv_power_available).post(tv_power))
         .route("/pairing", get(pairing).post(start_pairing).delete(cancel_pairing))
         .route("/pairing/confirm", post(confirm_pairing))
         .route("/pairing/reject", post(reject_pairing))
+        .route("/remote", get(remote_info).put(set_remote))
+        .route("/remote/pair", post(remote_pair))
+        .route("/remote/confirm", post(remote_confirm))
+        .route("/remote/reject", post(remote_reject))
+        .route("/remote/devices", axum::routing::delete(remote_forget))
         .route("/play", post(play))
         .route("/stop", post(stop))
         .route("/status", get(status))
@@ -314,6 +323,36 @@ async fn select_profile(
     state.playback.stop().await.map_err(internal)?;
     state.profiles.db.select(&id).await.map_err(internal)?;
     state.feeds.prefetch(account.clone());
+    Ok(Json(account.profile))
+}
+
+#[derive(Deserialize)]
+struct SubtitleRequest {
+    language: Option<String>,
+}
+
+async fn set_subtitles(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: Result<Json<SubtitleRequest>, JsonRejection>,
+) -> Result<Json<Profile>, ApiError> {
+    let Json(request) =
+        body.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "expected {language} JSON"))?;
+    if request.language.as_deref().is_some_and(|l| !profiles::valid_language(l)) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "language must be a code such as en or pt-BR, or null for off",
+        ));
+    }
+    let _transition = state.transition.lock().await;
+    let mut account = require_profile(&state, &id).await?;
+    state
+        .profiles
+        .db
+        .set_subtitles(&id, request.language.as_deref())
+        .await
+        .map_err(internal)?;
+    account.profile.subtitles = request.language;
     Ok(Json(account.profile))
 }
 
@@ -632,4 +671,98 @@ async fn next(State(state): State<AppState>) -> Result<Json<serde_json::Value>, 
     }
     let playing = state.playback.next(account).await.map_err(internal)?;
     Ok(Json(json!({"playing":playing})))
+}
+
+/// The TV's view of the phone remote: switched on or off, paired phones and any pairing in progress.
+async fn remote_info(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let remote = &state.remote;
+    let pairing = remote.pairing_info().await.map_err(internal)?;
+    let phone = remote.phone_code().await;
+    Ok(Json(json!({
+        "enabled": remote.running().await,
+        "devices": remote.device_count().await,
+        "url": pairing.as_ref().map(|p| &p.0),
+        "svg": pairing.as_ref().map(|p| &p.1),
+        "code": phone.as_ref().map(|p| &p.0),
+        "confirmed": phone.as_ref().is_some_and(|p| p.1),
+    })))
+}
+
+#[derive(Deserialize)]
+struct RemoteSwitch {
+    enabled: bool,
+}
+
+async fn set_remote(
+    State(state): State<AppState>,
+    Json(body): Json<RemoteSwitch>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.remote.set_enabled(body.enabled, state.clone()).await.map_err(|err| {
+        tracing::error!("phone remote switch failed: {err:#}");
+        ApiError::new(StatusCode::BAD_GATEWAY, "could not open the remote's port")
+    })?;
+    remote_info(State(state)).await
+}
+
+async fn remote_pair(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    if state.remote.start_pairing().await.map_err(internal)?.is_none() {
+        return Err(ApiError::new(StatusCode::CONFLICT, "turn the phone remote on first"));
+    }
+    remote_info(State(state)).await
+}
+
+async fn remote_confirm(
+    State(state): State<AppState>,
+    Json(body): Json<ConfirmBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !state.remote.confirm(&body.code).await.map_err(internal)? {
+        return Err(ApiError::new(StatusCode::CONFLICT, "the phone's code changed: check the new one"));
+    }
+    Ok(Json(json!({"status": "ok"})))
+}
+
+async fn remote_reject(State(state): State<AppState>) -> Json<serde_json::Value> {
+    state.remote.reject().await;
+    Json(json!({"status": "ok"}))
+}
+
+async fn remote_forget(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    state.remote.forget_devices().await.map_err(internal)?;
+    Ok(Json(json!({"status": "ok"})))
+}
+
+/// Open YouTube TV in its own Firefox window as the current profile.
+async fn youtube_tv(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let _transition = state.transition.lock().await;
+    let account = state.profiles.active().await.map_err(internal)?;
+    if state.profiles.youtube_tv_open() || state.profiles.login_status(&account.profile.id).await.busy() {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "a Firefox window for this profile is already open: close it first",
+        ));
+    }
+    state.playback.stop().await.map_err(internal)?;
+    state.profiles.youtube_tv(account).await.map_err(|err| {
+        tracing::error!("could not open YouTube TV: {err:#}");
+        ApiError::new(StatusCode::BAD_GATEWAY, "could not open Firefox")
+    })?;
+    Ok(Json(json!({"status": "opening"})))
+}
+
+async fn tv_power_available() -> Json<serde_json::Value> {
+    Json(json!({"available": crate::cec::available().await}))
+}
+
+#[derive(Deserialize)]
+struct TvPower {
+    on: bool,
+}
+
+/// Switch the TV on or into standby over HDMI-CEC.
+async fn tv_power(Json(body): Json<TvPower>) -> Result<Json<serde_json::Value>, ApiError> {
+    crate::cec::power(body.on).await.map_err(|err| {
+        tracing::warn!("HDMI-CEC failed: {err:#}");
+        ApiError::new(StatusCode::BAD_GATEWAY, "the TV did not respond over HDMI-CEC")
+    })?;
+    Ok(Json(json!({"status": "ok"})))
 }

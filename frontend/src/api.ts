@@ -78,7 +78,7 @@ export const play = (id: string, start?: number) => playback('play', { id, start
 export const stop = () => playback('stop', {})
 export const playerStatus = () => playback<PlayerStatus>('status')
 
-export type Profile = { id: string; name: string; color: string }
+export type Profile = { id: string; name: string; color: string; subtitles: string | null }
 export type ProfileList = { profiles: Profile[]; active_id: string }
 export type LoginStatus = {
   state: 'guest' | 'unknown' | 'signing_in' | 'checking' | 'signed_in' | 'sign_in_again' | 'check_failed'
@@ -88,6 +88,14 @@ export type LoginStatus = {
 export const profiles = () => playback<ProfileList>('profiles')
 export const createProfile = (name: string, color: string) => playback<Profile>('profiles', { name, color })
 export const selectProfile = (id: string) => playback<Profile>(`profiles/${encodeURIComponent(id)}/select`, {})
+export async function setSubtitles(id: string, language: string | null) {
+  const res = await fetch(`/api/profiles/${encodeURIComponent(id)}/subtitles`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ language }),
+  })
+  const data = await res.json().catch(() => null)
+  if (!res.ok) throw new Error(data?.error ?? `request failed (${res.status})`)
+  return data as Profile
+}
 export const signin = async (id: string) => {
   const status = await playback<LoginStatus>(`profiles/${encodeURIComponent(id)}/signin`, {})
   for (const key of cache.keys()) { if (key.startsWith(`${id}:`)) cache.delete(key) }
@@ -128,3 +136,28 @@ export async function deleteQueue(id?: string) {
 }
 
 export const exitToDesktop = () => playback<{ status: string }>('system/exit', {})
+
+export const youtubeTv = () => playback<{ status: string }>('system/youtube-tv', {})
+export const tvPowerAvailable = () => playback<{ available: boolean }>('system/tv')
+export const tvPower = (on: boolean) => playback<{ status: string }>('system/tv', { on })
+
+export type RemoteInfo = {
+  enabled: boolean; devices: number
+  url: string | null; svg: string | null; code: string | null; confirmed: boolean
+}
+export const remoteInfo = () => playback<RemoteInfo>('remote')
+export async function setRemote(enabled: boolean) {
+  const res = await fetch('/api/remote', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
+  })
+  const data = await res.json().catch(() => null)
+  if (!res.ok) throw new Error(data?.error ?? `request failed (${res.status})`)
+  return data as RemoteInfo
+}
+export const remotePair = () => playback<RemoteInfo>('remote/pair', {})
+export const remoteConfirm = (code: string) => playback<{ status: string }>('remote/confirm', { code })
+export const remoteReject = () => playback<{ status: string }>('remote/reject', {})
+export async function forgetPhones() {
+  const res = await fetch('/api/remote/devices', { method: 'DELETE' })
+  if (!res.ok) throw new Error(`request failed (${res.status})`)
+}

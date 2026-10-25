@@ -11,11 +11,14 @@ use std::{
     os::unix::fs::{DirBuilderExt, PermissionsExt},
     path::{Path, PathBuf},
     process::Stdio,
-    sync::Arc,
+    sync::{Arc, atomic::Ordering},
 };
 use tokio::{process::Command, sync::Mutex};
 
 const USER_JS: &str = include_str!("../config/firefox/user.js");
+const YOUTUBE_TV_URL: &str = "https://www.youtube.com/tv";
+/// YouTube TV only serves its leanback interface to TV browsers; this is a games console's.
+const TV_USER_AGENT: &str = "Mozilla/5.0 (PlayStation; PlayStation 5/2.26) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0 Safari/605.1.15";
 const SIGNIN_URL: &str = "https://accounts.google.com/ServiceLogin?continue=https://www.youtube.com";
 
 #[derive(Clone, Debug, Serialize)]
@@ -67,6 +70,7 @@ pub struct Profiles {
     pub db: Database,
     pub pairing: Pairing,
     root: PathBuf,
+    tv_open: Arc<std::sync::atomic::AtomicBool>,
     runtime: Arc<Mutex<HashMap<String, Runtime>>>,
 }
 struct Runtime {
@@ -157,6 +161,7 @@ impl Profiles {
             db,
             pairing,
             root,
+            tv_open: Default::default(),
             runtime: Arc::new(Mutex::new(HashMap::new())),
         })
     }
@@ -282,6 +287,67 @@ impl Profiles {
         Ok(())
     }
 
+    /// Open YouTube TV in a Firefox window (with uBlock Origin from the policy) as this profile, so
+    /// it is signed in. The account is marked busy until the window closes (Alt+F4).
+    pub async fn youtube_tv(&self, account: Account) -> Result<()> {
+        if self.tv_open.swap(true, Ordering::SeqCst) {
+            bail!("YouTube TV is already open");
+        }
+        let result = self.open_youtube_tv(account).await;
+        if result.is_err() {
+            self.tv_open.store(false, Ordering::SeqCst);
+        }
+        result
+    }
+
+    pub fn youtube_tv_open(&self) -> bool {
+        self.tv_open.load(Ordering::SeqCst)
+    }
+
+    async fn open_youtube_tv(&self, account: Account) -> Result<()> {
+        let (folder, temporary) = match account.firefox.clone() {
+            Some(folder) => (folder, false),
+            None => {
+                // Guest has no profile directory of its own, so use a throwaway one.
+                let folder = std::env::temp_dir().join(format!("couchtube-tv-{}", std::process::id()));
+                private_directory(&folder)?;
+                (folder, true)
+            }
+        };
+        let preferences = format!("{USER_JS}\nuser_pref(\"general.useragent.override\", \"{TV_USER_AGENT}\");\n");
+        std::fs::write(folder.join("user.js"), preferences)?;
+        let mut child = Command::new("firefox")
+            .args(["--new-instance", "--no-remote", "--kiosk", "--profile"])
+            .arg(&folder)
+            .arg(YOUTUBE_TV_URL)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .context("could not open Firefox")?;
+        self.set_status(
+            &account.profile.id,
+            LoginStatus::new(LoginState::SigningIn, "YouTube TV is open. Close its window (Alt+F4) to come back"),
+        )
+        .await;
+        let profiles = self.clone();
+        tokio::spawn(async move {
+            let _ = child.wait().await;
+            // The TV user agent must not stay in a profile that is also used to sign in.
+            if temporary {
+                let _ = std::fs::remove_dir_all(&folder);
+            } else {
+                let _ = std::fs::write(folder.join("user.js"), USER_JS);
+            }
+            profiles.tv_open.store(false, Ordering::SeqCst);
+            profiles
+                .set_status(&account.profile.id, LoginStatus::new(LoginState::Unknown, "Sign-in has not been checked"))
+                .await;
+        });
+        Ok(())
+    }
+
     pub async fn start_check(&self, account: Account) {
         self.set_status(
             &account.profile.id,
@@ -346,6 +412,15 @@ pub fn valid_name(name: &str) -> bool {
     let length = name.trim().chars().count();
     (1..=40).contains(&length) && !name.chars().any(char::is_control)
 }
+/// A language code such as `en`, `pt-BR` or `zh-Hans`, safe to pass to mpv and yt-dlp.
+pub fn valid_language(language: &str) -> bool {
+    let mut parts = language.split('-');
+    parts
+        .next()
+        .is_some_and(|p| (2..=3).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_lowercase()))
+        && parts.all(|p| (2..=8).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_alphanumeric()))
+}
+
 pub fn valid_color(color: &str) -> bool {
     color.len() == 7 && color.starts_with('#') && color[1..].bytes().all(|b| b.is_ascii_hexdigit())
 }
@@ -394,6 +469,16 @@ mod tests {
         drop(profiles);
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn validates_subtitle_languages() {
+        for ok in ["en", "fil", "pt-BR", "zh-Hans"] {
+            assert!(valid_language(ok), "{ok}");
+        }
+        for bad in ["", "e", "EN", "en_US", "en-", "english", "en;rm", "--sid=1", "en,de"] {
+            assert!(!valid_language(bad), "{bad}");
+        }
+    }
+
     #[test]
     fn validates_display_fields() {
         assert!(valid_name(" Alice "));

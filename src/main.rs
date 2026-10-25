@@ -1,10 +1,12 @@
 mod api;
+mod cec;
 mod db;
 mod feeds;
 mod pairing;
 mod playback;
 mod player;
 mod profiles;
+mod remote;
 mod ytdlp;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -18,6 +20,7 @@ use tracing_subscriber::EnvFilter;
 
 const DEFAULT_PORT: u16 = 7878;
 const DEFAULT_PAIR_PORT: u16 = 7879;
+const DEFAULT_REMOTE_PORT: u16 = 7880;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -71,12 +74,19 @@ async fn main() -> Result<()> {
     let pairing = pairing::Pairing::new(pair_port);
     let profiles = profiles::Profiles::open(data_dir, pairing.clone())?;
     let playback = playback::Playback::new(player.clone(), profiles.db.clone());
+    let remote_port = match std::env::var("COUCHTUBE_REMOTE_PORT") {
+        Ok(p) => p.parse().context("COUCHTUBE_REMOTE_PORT must be a port number")?,
+        Err(_) => DEFAULT_REMOTE_PORT,
+    };
+    let remote = remote::Remote::new(profiles.db.clone(), remote_port);
     let state = api::AppState {
+        remote: remote.clone(),
         playback: playback.clone(),
         feeds: feeds::Feeds(profiles.db.clone()),
         profiles,
         transition: Default::default(),
     };
+    remote.resume(state.clone()).await;
     let tracked = state.clone();
     let monitor = tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
@@ -115,6 +125,7 @@ async fn main() -> Result<()> {
         .await;
     monitor.abort();
     pairing.end().await;
+    remote.end().await;
     playback.stop().await?;
     result?;
     Ok(())

@@ -13,6 +13,8 @@ pub struct Profile {
     pub id: String,
     pub name: String,
     pub color: String,
+    /// Preferred subtitle language (for example `en`); `None` keeps subtitles off.
+    pub subtitles: Option<String>,
 }
 
 #[derive(Clone)]
@@ -50,9 +52,18 @@ impl Database {
                 PRIMARY KEY(profile_id, cache_key)
             );
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS remote_devices (
+                token_hash TEXT PRIMARY KEY, created_at INTEGER NOT NULL DEFAULT (unixepoch())
+            );
             INSERT OR IGNORE INTO profiles(id, name, color) VALUES ('guest', 'Guest', '#707887');
             INSERT OR IGNORE INTO settings(key, value) VALUES ('active_profile', 'guest');",
         )?;
+        let has_subtitles = connection
+            .prepare("SELECT 1 FROM pragma_table_info('profiles') WHERE name = 'subtitles'")?
+            .exists([])?;
+        if !has_subtitles {
+            connection.execute("ALTER TABLE profiles ADD COLUMN subtitles TEXT", [])?;
+        }
         Ok(Self(Arc::new(Mutex::new(connection))))
     }
 
@@ -76,7 +87,7 @@ impl Database {
     pub async fn list(&self) -> Result<Vec<Profile>> {
         self.with(|db| {
             let mut statement = db.prepare(
-                "SELECT id, name, color FROM profiles ORDER BY id != 'guest', created_at, rowid",
+                "SELECT id, name, color, subtitles FROM profiles ORDER BY id != 'guest', created_at, rowid",
             )?;
             Ok(statement
                 .query_map([], |r| {
@@ -84,6 +95,7 @@ impl Database {
                         id: r.get(0)?,
                         name: r.get(1)?,
                         color: r.get(2)?,
+                        subtitles: r.get(3)?,
                     })
                 })?
                 .collect::<rusqlite::Result<_>>()?)
@@ -96,13 +108,14 @@ impl Database {
         self.with(move |db| {
             Ok(db
                 .query_row(
-                    "SELECT id, name, color FROM profiles WHERE id = ?1",
+                    "SELECT id, name, color, subtitles FROM profiles WHERE id = ?1",
                     [id],
                     |r| {
                         Ok(Profile {
                             id: r.get(0)?,
                             name: r.get(1)?,
                             color: r.get(2)?,
+                            subtitles: r.get(3)?,
                         })
                     },
                 )
@@ -120,14 +133,63 @@ impl Database {
                 "INSERT INTO profiles(id, name, color) VALUES (?1, ?2, ?3)",
                 params![id, name, color],
             )?;
-            Ok(Profile { id, name, color })
+            Ok(Profile { id, name, color, subtitles: None })
         })
         .await
     }
 
+    pub async fn set_subtitles(&self, id: &str, language: Option<&str>) -> Result<()> {
+        let id = id.to_owned();
+        let language = language.map(str::to_owned);
+        self.with(move |db| {
+            db.execute("UPDATE profiles SET subtitles = ?2 WHERE id = ?1", params![id, language])?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn remote_enabled(&self) -> Result<bool> {
+        self.with(|db| {
+            Ok(db
+                .query_row("SELECT value FROM settings WHERE key = 'remote_enabled'", [], |r| r.get::<_, String>(0))
+                .optional()?
+                .is_some_and(|v| v == "1"))
+        })
+        .await
+    }
+
+    pub async fn set_remote_enabled(&self, enabled: bool) -> Result<()> {
+        self.with(move |db| {
+            db.execute(
+                "INSERT INTO settings(key, value) VALUES ('remote_enabled', ?1) ON CONFLICT(key) DO UPDATE SET value = ?1",
+                [if enabled { "1" } else { "0" }],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn add_device(&self, token_hash: &str) -> Result<()> {
+        let hash = token_hash.to_owned();
+        self.with(move |db| { db.execute("INSERT OR IGNORE INTO remote_devices(token_hash) VALUES (?1)", [hash])?; Ok(()) }).await
+    }
+
+    pub async fn has_device(&self, token_hash: &str) -> Result<bool> {
+        let hash = token_hash.to_owned();
+        self.with(move |db| Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM remote_devices WHERE token_hash = ?1)", [hash], |r| r.get(0))?)).await
+    }
+
+    pub async fn device_count(&self) -> Result<u32> {
+        self.with(|db| Ok(db.query_row("SELECT COUNT(*) FROM remote_devices", [], |r| r.get(0))?)).await
+    }
+
+    pub async fn clear_devices(&self) -> Result<()> {
+        self.with(|db| { db.execute("DELETE FROM remote_devices", [])?; Ok(()) }).await
+    }
+
     pub async fn active(&self) -> Result<Profile> {
-        self.with(|db| Ok(db.query_row("SELECT p.id, p.name, p.color FROM profiles p JOIN settings s ON s.value = p.id WHERE s.key = 'active_profile'", [],
-            |r| Ok(Profile { id: r.get(0)?, name: r.get(1)?, color: r.get(2)? }))?)).await
+        self.with(|db| Ok(db.query_row("SELECT p.id, p.name, p.color, p.subtitles FROM profiles p JOIN settings s ON s.value = p.id WHERE s.key = 'active_profile'", [],
+            |r| Ok(Profile { id: r.get(0)?, name: r.get(1)?, color: r.get(2)?, subtitles: r.get(3)? }))?)).await
     }
 
     pub async fn select(&self, id: &str) -> Result<()> {
@@ -418,9 +480,12 @@ mod tests {
         let profile = db.create("A name ' with SQL", "#aabbcc").await.unwrap();
         assert_eq!(profile.id.len(), 32);
         db.select(&profile.id).await.unwrap();
+        assert_eq!(db.active().await.unwrap().subtitles, None);
+        db.set_subtitles(&profile.id, Some("de")).await.unwrap();
         drop(db);
         let db = Database::open(&path).unwrap();
         assert_eq!(db.active().await.unwrap().name, profile.name);
+        assert_eq!(db.active().await.unwrap().subtitles.as_deref(), Some("de"));
         assert!(db.select("missing").await.is_err());
         db.remove(&profile.id).await.unwrap();
         assert_eq!(db.active().await.unwrap().id, "guest");
