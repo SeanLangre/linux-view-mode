@@ -45,6 +45,7 @@ impl Playback {
             None => self.db.resume(&account.profile.id, id).await?,
         };
         let token = self.player.play(id, start, account.cookies()).await?;
+        self.db.begin_viewing(&account.profile.id, id).await?;
         self.db.dequeue(&account.profile.id, Some(id)).await?;
         *self.session.lock().await = Some(Session {
             token,

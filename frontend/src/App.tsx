@@ -28,6 +28,8 @@ const HOME_MENU = [
   { label: 'Liked', action: 'liked' }, { label: 'Queue', action: 'queue' },
   { label: 'Exit to desktop', action: 'exit' },
 ]
+/** Menu entries that need a signed-in YouTube account. */
+const ACCOUNT_ACTIONS = ['recommended', 'subscriptions', 'watchlater', 'liked']
 const FEED_NAMES: Record<api.FeedKind, string> = {
   continue: 'Continue watching', recommended: 'Recommended', subscriptions: 'Subscriptions',
   history: 'History', watchlater: 'Watch later', liked: 'Liked videos',
@@ -47,6 +49,13 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
   const [recent, setRecent] = useState(() => loadRecent(profile.id))
   const [draft, setDraft] = useState('')
   const [dataRevision, setDataRevision] = useState(0)
+  // Guest never has an account; a profile whose login expired shouldn't offer account feeds either.
+  const [loginExpired, setLoginExpired] = useState(false)
+  const hasAccount = profile.id !== 'guest' && !loginExpired
+  useEffect(() => {
+    if (profile.id === 'guest') return
+    api.loginStatus(profile.id).then((status) => setLoginExpired(status.state === 'sign_in_again'), () => {})
+  }, [profile.id])
   const refreshRequested = useRef(false)
   const [feedback, setFeedback] = useState<string | null>(null)
   const feedbackTimer = useRef<number | undefined>(undefined)
@@ -122,7 +131,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
       case 'home':
         return [
           { kind: 'search-button' },
-          { kind: 'menu', items: HOME_MENU },
+          { kind: 'menu', items: hasAccount ? HOME_MENU : HOME_MENU.filter((item) => !ACCOUNT_ACTIONS.includes(item.action)) },
           ...data.rows,
           ...(recent.length > 0
             ? [{ kind: 'chips', title: 'Recent searches', items: recent } as const]
@@ -136,7 +145,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
       case 'channel':
         return data.rows
     }
-  }, [screen.kind, recent, data.rows])
+  }, [screen.kind, recent, data.rows, hasAccount])
 
   const specs: RowSpec[] = rows.map((row) => ({
     length: rowLength(row),

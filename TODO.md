@@ -7,11 +7,11 @@ Checklist for [`plan.md`](plan.md). Tick items as they're done; move finished se
 - [ ] Check whether watched videos are added to the profile's YouTube history
   - Already built: after ≥30 s of real watch time, `Playback::save` (`src/playback.rs`) runs `yt-dlp --mark-watched --simulate` with the profile's cookies (`ytdlp::mark_watched`). On success it sets `progress.marked=1`. Guest has no cookies, so its watches stay local only.
   - Test (same as the Phase 5 item below): on a signed-in profile, watch ≥35 s. Then check the backend log for `YouTube watched-history sync failed`, run `SELECT video_id, watched, marked FROM progress` in the profile DB, and check youtube.com/feed/history in that profile's Firefox.
-  - Known gap: once `marked=1`, a rewatch is never sent again, so the video doesn't move back to the top of YouTube history. Possible fix: reset `marked` when a new viewing starts, or mark on every viewing ≥30 s.
+  - Rewatch gap fixed 2026-10-25: `Database::begin_viewing` (called from `Playback::play`) resets `watched` and `marked`, so every viewing ≥30 s is sent again. Untested against real YouTube.
 
 - [ ] Only one instance at a time / closing the window shuts everything down — implemented 2026-10-25, still to test on a real run
   - Done: backend `flock` on `$data_dir/couchtube.lock` (checked: a second backend exits with a message). `AppRun` exits if `/api/health` already answers (starts `couchtube-kiosk` if that unit is active), starts Firefox with `--new-instance --no-remote --profile $DATA/kiosk-firefox`, and its trap kills the backend with a 5 s `KILL` fallback. "Exit to desktop" now closes the kiosk Firefox (`pkill -f kiosk-firefox`) when not under systemd.
-  - Still to check: rebuild the AppImage, then `pgrep -a 'couchtube|mpv|firefox|yt-dlp'` after closing the window (including sign-in Firefox windows and mpv); README/`install.sh` wording for the systemd units (drop or keep as optional appliance mode).
+  - Checked 2026-10-25 (AppImage): after quitting, `pgrep -a 'couchtube|mpv|firefox|yt-dlp'` printed nothing. Still to check: closing the window via the Firefox X (not mpv quit) and with a sign-in Firefox open, a second launch while one runs, "Exit to desktop"; README/`install.sh` wording for the systemd units (drop or keep as optional appliance mode).
 
 ## Sign-in follow-ups (second review, 2026-10-21)
 
@@ -45,7 +45,7 @@ Checklist for [`plan.md`](plan.md). Tick items as they're done; move finished se
 
 ## Known issues
 
-- [ ] Follow up on the reported mpv warnings: `client removed during hook handling`, `Packet corrupt`, `Invalid OBU length`, and `Failed to parse temporal unit`. The log confirms AV1 1080p59.94 playback with VA-API; whether playback visibly failed or the user quit at ~20 s is not confirmed. Record the video ID and reproduction steps if it recurs.
+- [ ] Follow up on the reported mpv warnings: `client removed during hook handling`, `Packet corrupt`, `Invalid OBU length`, and `Failed to parse temporal unit`. The log confirms AV1 1080p59.94 playback with VA-API; whether playback visibly failed or the user quit at ~20 s is not confirmed. Record the video ID and reproduction steps if it recurs. 2026-10-25, AppImage run: the same warnings appeared on a 40-minute AV1 1080p video (uploader Watcher, uploaded 2026-10-22), but the user said the video looked fine, so no change. Only switch `ytdl-format` away from AV1 (e.g. `[vcodec!^=av01]`) if playback visibly breaks.
 - **Top priority batch (2026-10-25)**, code and unit tests done, not tried with a real account:
   - Upload date: `--extractor-args youtubetab:approximate_date` (verified live: channel and search entries get `timestamp`), `Video.timestamp`, `formatAge()` on the card meta line.
   - Refresh: `U` now passes `refresh=true` for search/channel/feed pages and drops the frontend cache key; "Refreshing…" toast. Still open from the old item: F5 in the kiosk doesn't refresh, and Recommended may legitimately return the same videos.

@@ -257,6 +257,13 @@ impl Database {
         }).await
     }
 
+    /// A new viewing counts from zero, so a rewatch of 30 s or more is sent to YouTube again.
+    pub async fn begin_viewing(&self, profile: &str, id: &str) -> Result<()> {
+        let profile = profile.to_owned();
+        let id = id.to_owned();
+        self.with(move |db| { db.execute("UPDATE progress SET watched=0, marked=0 WHERE profile_id=?1 AND video_id=?2", params![profile,id])?; Ok(()) }).await
+    }
+
     pub async fn should_mark(&self, profile: &str, id: &str) -> Result<bool> {
         let profile = profile.to_owned();
         let id = id.to_owned();
@@ -346,6 +353,13 @@ mod tests {
         assert!(db.should_mark(&alice.id, &video.id).await.unwrap());
         db.set_marked(&alice.id, &video.id).await.unwrap();
         assert!(!db.should_mark(&alice.id, &video.id).await.unwrap());
+        // A rewatch starts from zero and is sent to YouTube again after 30 s.
+        db.begin_viewing(&alice.id, &video.id).await.unwrap();
+        assert!(!db.should_mark(&alice.id, &video.id).await.unwrap());
+        db.save_progress(&alice.id, video.clone(), 40.0, Some(100.0), 31.0, false)
+            .await
+            .unwrap();
+        assert!(db.should_mark(&alice.id, &video.id).await.unwrap());
         assert!(
             db.cache_get(&alice.id, "feed:recommended")
                 .await
