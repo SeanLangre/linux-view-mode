@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
         Err(_) => DEFAULT_PAIR_PORT,
     };
     let pairing = pairing::Pairing::new(pair_port);
-    let profiles = profiles::Profiles::open(data_dir, pairing.clone(), port)?;
+    let profiles = profiles::Profiles::open(data_dir, pairing.clone())?;
     let playback = playback::Playback::new(player.clone(), profiles.db.clone());
     let state = api::AppState {
         playback: playback.clone(),
@@ -89,10 +89,6 @@ async fn main() -> Result<()> {
         }
     });
     let app = Router::new()
-        .route(
-            "/signin",
-            axum::routing::get(|| async { axum::response::Html(include_str!("signin.html")) }),
-        )
         .nest("/api", api::router(state))
         .fallback_service(frontend)
         .layer(axum::middleware::from_fn_with_state(port, api::require_local_host))

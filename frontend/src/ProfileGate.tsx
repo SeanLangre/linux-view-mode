@@ -56,13 +56,13 @@ export default function ProfileGate() {
     return () => { cancelled = true; window.clearTimeout(timer) }
   }, [managedId])
 
-  // The phone-keyboard QR code exists only while the sign-in window is open.
+  // The phone-keyboard QR code is shown on the login page; Firefox then opens straight on Google.
   useEffect(() => {
-    if (!signingIn) { setQr(null); return }
+    if (!managedId) { setQr(null); return }
     let cancelled = false
-    api.pairing().then((result) => { if (!cancelled) setQr(result) }, () => { if (!cancelled) setQr(null) })
+    api.startPairing().then((result) => { if (!cancelled) setQr(result) }, () => { if (!cancelled) setQr(null) })
     return () => { cancelled = true }
-  }, [signingIn])
+  }, [managedId, signingIn])
 
   // While a QR code is shown, watch for a phone saying hello (or a replaced link after "No").
   const hasQr = qr !== null
@@ -185,8 +185,6 @@ export default function ProfileGate() {
             const profile = await api.createProfile(name, color)
             await refresh()
             setView({ kind: 'manage', profile })
-            // Show the phone QR code now; Firefox opens only when asked.
-            setQr(await api.startPairing().catch(() => null))
           })
         }}>
           <label>Name<input className="search-box" value={name} maxLength={40} required disabled={busy}
@@ -203,7 +201,7 @@ export default function ProfileGate() {
         <p className="status" role="status">{login?.message ?? 'Getting sign-in status…'}</p>
         <p className="status">{signingIn
           ? 'Complete sign-in in the Firefox window. It closes by itself once you are signed in, then CouchTube checks the login.'
-          : 'Choose Open Firefox sign-in when you are ready. It closes by itself once you are signed in, then CouchTube checks the login.'}</p>
+          : 'Choose Open Firefox sign-in to go straight to Google. It closes by itself once you are signed in, then CouchTube checks the login.'}</p>
         {qr && <div className="pairing">
           <img alt="QR code for the phone sign-in link, which is also written below" width={240} height={240} src={`data:image/svg+xml;utf8,${encodeURIComponent(qr.svg)}`} />
           <div className="pairing-text">
@@ -214,6 +212,9 @@ export default function ProfileGate() {
               <div className="pairing-buttons">
                 <button data-nav disabled={busy} onClick={() => void perform(async () => {
                   await api.confirmPairing(pendingCode)
+                  // The code matches, so open Firefox on Google now; the phone types into it.
+                  const status = await api.signin(view.profile.id)
+                  setStatuses((current) => ({ ...current, [view.profile.id]: status }))
                   setQr(await api.pairing())
                 })}>Yes, that’s my phone</button>
                 <button data-nav disabled={busy} onClick={() => void perform(async () => {
@@ -222,7 +223,7 @@ export default function ProfileGate() {
                 })}>No</button>
               </div>
             </div> : qr.confirmed
-              ? <p className="pairing-ok" role="status">✓ Phone connected. Open Firefox sign-in, then continue to Google.</p>
+              ? <p className="pairing-ok" role="status">✓ Phone connected. Firefox is open on Google; type your email and password on the phone.</p>
               : <p className="pairing-url">{qr.url}</p>}
           </div>
         </div>}

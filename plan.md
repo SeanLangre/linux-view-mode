@@ -79,7 +79,7 @@ How to run the code is in `README.md`; the working checklist is `TODO.md`.
 
 ### Signing in (once per account, from the TV)
 1. "Add account" in the UI → backend opens a separate Firefox window (X11 mode, `MOZ_ENABLE_WAYLAND=0`):
-   `firefox --new-instance --no-remote --profile <dir> http://127.0.0.1:7878/signin`
+   `firefox --new-instance --no-remote --profile <dir> https://accounts.google.com/ServiceLogin?continue=https://www.youtube.com`
    Before that, the UI shows the phone-pairing QR code; Firefox opens only when the user chooses **Open Firefox sign-in**. The start page links to `accounts.google.com/ServiceLogin?continue=https://www.youtube.com`.
 2. Sign in with the phone keyboard (see below) or the TV keyboard. If the account already offers a passkey or phone prompt under Google's "Try another way" (see `alternative_login.md`), the user can use that instead; CouchTube doesn't require or ask for any account change. On the first real test the account offered nothing but the password, so phone keyboard plus encryption (`encryption-plan.md`) stays the main path. Whichever way, the cookies are the same and the window closes as in step 3.
 3. The backend polls the profile's `cookies.sqlite` (a copy, since Firefox holds it open) every 2 s. Once YouTube's `LOGIN_INFO` cookie has been seen three times in a row, it closes Firefox so the cookies are flushed.
@@ -141,7 +141,7 @@ src/
   ytdlp.rs                 ✅ running yt-dlp: search, channel (later: feeds, mark-watched)
   profiles.rs              ✅ profiles, Firefox profile setup, sign-in, login check (refresh timer in Phase 6)
   pairing.rs               ✅ phone pairing for sign-in: token, QR code, LAN page, xdotool typing
-  signin.html, pairing.html ✅ sign-in start page (TV) and phone page
+  pairing.html ✅ phone page
   player.rs                ✅ mpv process + persistent IPC (one player at a time)
   playback.rs              ✅ progress, watched sync, queue advancement
   feeds.rs                 ✅ account feeds, persistent cache and prefetch
@@ -180,7 +180,6 @@ React 19 + TypeScript + Vite 8, tested with vitest, linted with oxlint. No UI li
 | GET | `/api/profiles/:id/status` ✅ | Login state/message; `?check=true` starts a check |
 | GET/POST/DELETE | `/api/pairing` ✅ | Phone URL (with key) and QR SVG, plus `code`/`confirmed` of the bound phone, while a sign-in is in progress, else 404; POST starts it before Firefox opens; DELETE cancels it if no window is open |
 | POST | `/api/pairing/confirm`, `/api/pairing/reject` ✅ | TV says the phone's code matches (409 if it changed) / doesn't match (new token and key) |
-| GET | `/signin` ✅ | Sign-in start page shown in the account Firefox window |
 | GET/POST | `:7879/p/:token`, `/p/:token/{hello,status,email,password,code}` ✅ | Phone page, encrypted hello (confirmation code), status poll and the three encrypted typing steps (LAN, token required, only while signing in) |
 | GET | `/api/feed/:kind` ✅ | `continue`, `recommended`, `subscriptions`, `history`, `watchlater`, `liked` |
 | GET | `/api/search?q=&limit=` ✅ | Search (default 24, max 50 results) |
