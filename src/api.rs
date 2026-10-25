@@ -47,6 +47,7 @@ pub fn router(state: AppState) -> Router {
         .route("/stop", post(stop))
         .route("/status", get(status))
         .route("/feed/{kind}", get(feed))
+        .route("/check", get(check))
         .route("/queue", get(queue).post(enqueue).delete(clear_queue))
         .route("/queue/{id}", axum::routing::delete(remove_queue))
         .route("/next", post(next))
@@ -508,6 +509,45 @@ async fn feed(
             )
         })
 }
+/// How many videos from the history feed `check` resolves and fetches thumbnails for.
+const CHECK_SAMPLE: usize = 3;
+
+/// Reports whether history loads and whether a sample of its videos and thumbnails are available.
+async fn check(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let account = {
+        let _transition = state.transition.lock().await;
+        state.profiles.active().await.map_err(internal)?
+    };
+    let history = match state.feeds.feed(&account, "history", 0, true).await {
+        Ok(videos) => videos,
+        Err(err) => {
+            tracing::warn!(profile_id=%account.profile.id,"history check failed: {err:#}");
+            return Ok(Json(json!({ "history": { "ok": false, "error": "could not load history" } })));
+        }
+    };
+    let sample: Vec<Video> = history.iter().take(CHECK_SAMPLE).cloned().collect();
+    let thumbs: Vec<_> = sample
+        .iter()
+        .map(|v| {
+            let url = v.thumb.clone();
+            tokio::spawn(async move { ytdlp::check_thumbnail(&url).await })
+        })
+        .collect();
+    let mut items = Vec::new();
+    {
+        let _request = account.gate.lock().await;
+        for video in &sample {
+            let ok = ytdlp::check_video(&video.id, account.cookies()).await.is_ok();
+            items.push((video.id.clone(), ok));
+        }
+    }
+    let mut results = Vec::new();
+    for ((id, video_ok), thumb) in items.into_iter().zip(thumbs) {
+        results.push(json!({ "id": id, "video": video_ok, "thumbnail": thumb.await.unwrap_or(false) }));
+    }
+    Ok(Json(json!({ "history": { "ok": true, "count": history.len() }, "videos": results })))
+}
+
 async fn queue(State(state): State<AppState>) -> Result<Json<Vec<Video>>, ApiError> {
     let _transition = state.transition.lock().await;
     let account = state.profiles.active().await.map_err(internal)?;

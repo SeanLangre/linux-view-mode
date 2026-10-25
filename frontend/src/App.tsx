@@ -495,7 +495,18 @@ function VideoCard({ video, focused }: { video: Video; focused: boolean }) {
     <div className={`card ${focused ? 'focused' : ''}`}>
       <div className="thumb">
         {video.resume_position !== undefined && <span className="resume-badge">Resume {formatDuration(video.resume_position)}</span>}
-        <img src={video.thumb} alt="" loading="lazy" />
+        <img
+          src={video.thumb}
+          alt=""
+          loading="lazy"
+          onError={(e) => {
+            // Fall back once to the default thumbnail, then hide the broken image.
+            const img = e.currentTarget
+            const fallback = `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`
+            if (img.src !== fallback) img.src = fallback
+            else img.style.visibility = 'hidden'
+          }}
+        />
         <span className={`badge ${video.duration === null ? 'live' : ''}`}>
           {formatDuration(video.duration)}
         </span>

@@ -96,6 +96,11 @@ print(json.dumps({'entries':[{'id':'aqz-KE-bpKQ','title':'Account fixture','dura
                     request(f"feed/{kind}")
                     assert len([call for call in calls("yt-dlp") if call["args"][-1] == target]) == count
                 assert request("feed/recommended?refresh=true")[0] == 200
+                check = request("check")[1]
+                assert check["history"]["ok"] and check["videos"][0]["id"] == "aqz-KE-bpKQ" and check["videos"][0]["video"] is True
+                (root / "fail-feed").touch()
+                assert request("check")[1]["history"]["ok"] is False
+                (root / "fail-feed").unlink()
                 (root / "fail-feed").touch()
                 assert request("feed/recommended?refresh=true")[0] == 502
                 (root / "fail-feed").unlink()

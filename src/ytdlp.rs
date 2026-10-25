@@ -117,6 +117,36 @@ pub async fn mark_watched(id: &str, firefox: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Resolves a video the way playback would (no download); fails for private, deleted or blocked videos.
+pub async fn check_video(id: &str, firefox: Option<&Path>) -> Result<()> {
+    if !is_video_id(id) {
+        bail!("invalid video id");
+    }
+    run(
+        &format!("https://www.youtube.com/watch?v={id}"),
+        &["--no-flat-playlist", "--no-playlist", "--simulate"],
+        firefox,
+    )
+    .await?;
+    Ok(())
+}
+
+/// True if the thumbnail URL answers with a 2xx status. Only https URLs are fetched.
+pub async fn check_thumbnail(url: &str) -> bool {
+    if !url.starts_with("https://") {
+        return false;
+    }
+    let output = Command::new("curl")
+        .args(["--silent", "--location", "--output", "/dev/null", "--max-time", "10", "--write-out", "%{http_code}", "--"])
+        .arg(url)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await;
+    output.is_ok_and(|o| o.stdout.first() == Some(&b'2'))
+}
+
 pub fn is_video_id(id: &str) -> bool {
     id.len() == 11
         && id
