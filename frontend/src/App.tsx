@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import * as api from './api'
 import type { Video } from './api'
-import { formatDuration, formatViews } from './format'
+import { formatAge, formatDuration, formatViews } from './format'
 import { clamp, move, START, type Direction, type Focus, type RowSpec } from './nav'
 import { addRecent, loadRecent } from './recent'
 
@@ -23,6 +23,7 @@ type Row =
   | { kind: 'videos'; title?: string; videos: Video[]; carousel: boolean; error?: string }
 
 const HOME_MENU = [
+  { label: 'Recommended', action: 'recommended' }, { label: 'Subscriptions', action: 'subscriptions' },
   { label: 'History', action: 'history' }, { label: 'Watch later', action: 'watchlater' },
   { label: 'Liked', action: 'liked' }, { label: 'Queue', action: 'queue' },
   { label: 'Exit to desktop', action: 'exit' },
@@ -114,6 +115,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
   const { screen } = stack[stack.length - 1]
   const key = screenKey(screen)
   const data = useScreenRows(screen, dataRevision, refreshRequested)
+  const refreshing = data.refreshing
 
   const rows = useMemo<Row[]>(() => {
     switch (screen.kind) {
@@ -151,6 +153,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
   const moveFocus = (dir: Direction) => {
     const next = move(focus, dir, specs)
     if (next.row !== focus.row || next.col !== focus.col) setFocus(next)
+    else if (dir === 'down') data.loadMore()
   }
   const push = (next: Screen, focusAt: Focus = START) =>
     setStack((s) => [...s, { screen: next, focus: focusAt }])
@@ -357,7 +360,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
         />
       ))}
 
-      {data.loading && <SkeletonRow />}
+      {(data.loading || data.loadingMore) && <SkeletonRow />}
       {!data.loading && !data.error && !data.rows.some((row) => row.kind === 'videos' && row.videos.length > 0) && (
         <p className="status">{screen.kind === 'home' ? 'Search for a video, or sign in to load your recommendations and subscriptions.'
           : screen.kind === 'queue' ? 'Your queue is empty. Press A on a video to add it.'
@@ -398,6 +401,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
           {' · Esc to stop'}
         </div>
       )}
+      {refreshing && <div className="toast" role="status">Refreshing…</div>}
       {feedback && <div className="toast" role="status">{feedback}</div>}
       {playbackError && <div className="toast error" role="alert">{playbackError}</div>}
     </main>
@@ -477,7 +481,7 @@ function RowView({
 }
 
 function VideoCard({ video, focused }: { video: Video; focused: boolean }) {
-  const meta = [video.channel, formatViews(video.view_count)].filter(Boolean).join(' · ')
+  const meta = [video.channel, formatViews(video.view_count), formatAge(video.timestamp)].filter(Boolean).join(' · ')
   return (
     <div className={`card ${focused ? 'focused' : ''}`}>
       <div className="thumb">
@@ -509,31 +513,90 @@ function SkeletonRow() {
 /** Loads the video rows for a screen. Results are cached in `api`, so going back is instant. */
 function useScreenRows(screen: Screen, revision: number, refreshRequested: RefObject<boolean>) {
   const key = screenKey(screen)
-  const [state, setState] = useState<{ key: string; rows: Row[]; error: string | null }>()
+  type State = { key: string; rows: Row[]; error: string | null; videos?: Video[]; page: number; done: boolean }
+  const [state, setState] = useState<State>()
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const moreBusy = useRef(false)
+  const screenRef = useRef(screen)
+  screenRef.current = screen
 
   useEffect(() => {
     let cancelled = false
-    const done = (rows: Row[], error: string | null = null) => {
-      if (!cancelled) setState({ key, rows, error })
+    const done = (next: Omit<State, 'key'>) => {
+      if (!cancelled) setState({ key, ...next })
     }
     const refresh = refreshRequested.current
     refreshRequested.current = false
-    const pending = loadRows(screen, refresh)
-    if (pending) pending.then((rows) => done(rows), (err: Error) => done([], err.message))
-    else done([])
+    moreBusy.current = false
+    setLoadingMore(false)
+    if (refresh) setRefreshing(true)
+    const finish = () => { if (!cancelled) setRefreshing(false) }
+    const fail = (err: Error) => { finish(); done({ rows: [], error: err.message, page: 0, done: true }) }
+    if (paged(screen)) {
+      loadPage(screen, 0, refresh).then((videos) => {
+        finish()
+        done({ rows: gridRows(videos, pageTitle(screen)), videos, page: 0, error: null,
+          done: videos.length < api.PAGE_SIZE })
+      }, fail)
+    } else {
+      const pending = loadRows(screen, refresh)
+      if (pending) {
+        pending.then((rows) => { finish(); done({ rows, page: 0, error: null, done: true }) }, fail)
+      } else done({ rows: [], error: null, page: 0, done: true })
+    }
     return () => {
       cancelled = true
+      setRefreshing(false)
     }
     // `key` identifies the screen; the object itself changes identity on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, revision])
 
   const current = state?.key === key ? state : undefined
+
+  function loadMore() {
+    if (!current?.videos || current.done || moreBusy.current) return
+    moreBusy.current = true
+    setLoadingMore(true)
+    const page = current.page + 1
+    const known = current.videos
+    loadPage(screenRef.current, page, false)
+      .then((fetched) => {
+        const seen = new Set(known.map((v) => v.id))
+        const added = fetched.filter((v) => !seen.has(v.id))
+        // Recommended can repeat itself; an empty or short page means there is no more.
+        const videos = [...known, ...added]
+        setState((s) => s && s.key === key ? { ...s, videos, rows: gridRows(videos, pageTitle(screenRef.current)), page,
+          done: fetched.length < api.PAGE_SIZE || added.length === 0 || page + 1 >= api.MAX_PAGES } : s)
+      })
+      .catch(() => setState((s) => s && s.key === key ? { ...s, done: true } : s))
+      .finally(() => { moreBusy.current = false; setLoadingMore(false) })
+  }
+
   return {
     rows: current?.rows ?? [],
     loading: current === undefined,
+    loadingMore,
+    refreshing,
+    loadMore,
     error: current?.error ?? null,
   }
+}
+
+/** Screens that load more videos when focus reaches the bottom. */
+function paged(screen: Screen): boolean {
+  return screen.kind === 'feed' || screen.kind === 'channel'
+}
+
+function pageTitle(screen: Screen): string | undefined {
+  return screen.kind === 'channel' ? 'Latest uploads' : undefined
+}
+
+function loadPage(screen: Screen, page: number, refresh: boolean): Promise<Video[]> {
+  if (screen.kind === 'feed') return api.feed(screen.feed, refresh, page)
+  if (screen.kind === 'channel') return api.channel(screen.id, page, refresh).then((c) => c.videos)
+  return Promise.resolve([])
 }
 
 function loadRows(screen: Screen, refresh: boolean): Promise<Row[]> | null {
@@ -546,15 +609,13 @@ function loadRows(screen: Screen, refresh: boolean): Promise<Row[]> | null {
           error: result.status === 'rejected' ? (result.reason as Error).message : undefined,
         })))
     }
-    case 'feed':
-      return api.feed(screen.feed, refresh).then((videos) => gridRows(videos))
     case 'queue':
       return api.queue().then((videos) => gridRows(videos))
     case 'search':
       if (!screen.query) return null
-      return api.search(screen.query).then((videos) => gridRows(videos, `Results for “${screen.query}”`))
-    case 'channel':
-      return api.channel(screen.id).then((channel) => gridRows(channel.videos, 'Latest uploads'))
+      return api.search(screen.query, refresh).then((videos) => gridRows(videos, `Results for “${screen.query}”`))
+    default:
+      return null
   }
 }
 

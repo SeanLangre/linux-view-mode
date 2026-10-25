@@ -9,13 +9,19 @@ use anyhow::{Context, Result};
 #[derive(Clone)]
 pub struct Feeds(pub Database);
 impl Feeds {
-    pub async fn search(&self, account: &Account, query: &str, limit: u32) -> Result<Vec<Video>> {
+    pub async fn search(
+        &self,
+        account: &Account,
+        query: &str,
+        limit: u32,
+        refresh: bool,
+    ) -> Result<Vec<Video>> {
         let key = format!("search:{limit}:{query}");
-        if let Some(json) = self.0.cache_get(&account.profile.id, &key).await? {
+        if !refresh && let Some(json) = self.0.cache_get(&account.profile.id, &key).await? {
             return Ok(serde_json::from_str(&json)?);
         }
         let _request = account.gate.lock().await;
-        if let Some(json) = self.0.cache_get(&account.profile.id, &key).await? {
+        if !refresh && let Some(json) = self.0.cache_get(&account.profile.id, &key).await? {
             return Ok(serde_json::from_str(&json)?);
         }
         let videos = ytdlp::search(query, limit, account.cookies()).await?;
@@ -30,16 +36,22 @@ impl Feeds {
             .await?;
         Ok(videos)
     }
-    pub async fn channel(&self, account: &Account, id: &str) -> Result<Channel> {
-        let key = format!("channel:{id}");
-        if let Some(json) = self.0.cache_get(&account.profile.id, &key).await? {
+    pub async fn channel(
+        &self,
+        account: &Account,
+        id: &str,
+        page: u32,
+        refresh: bool,
+    ) -> Result<Channel> {
+        let key = format!("channel:{id}:{page}");
+        if !refresh && let Some(json) = self.0.cache_get(&account.profile.id, &key).await? {
             return Ok(serde_json::from_str(&json)?);
         }
         let _request = account.gate.lock().await;
-        if let Some(json) = self.0.cache_get(&account.profile.id, &key).await? {
+        if !refresh && let Some(json) = self.0.cache_get(&account.profile.id, &key).await? {
             return Ok(serde_json::from_str(&json)?);
         }
-        let channel = ytdlp::channel(id, 24, account.cookies()).await?;
+        let channel = ytdlp::channel(id, page, account.cookies()).await?;
         self.0
             .cache_put(
                 &account.profile.id,
@@ -51,7 +63,17 @@ impl Feeds {
             .await?;
         Ok(channel)
     }
-    pub async fn feed(&self, account: &Account, kind: &str, refresh: bool) -> Result<Vec<Video>> {
+    pub async fn feed(
+        &self,
+        account: &Account,
+        kind: &str,
+        page: u32,
+        refresh: bool,
+    ) -> Result<Vec<Video>> {
+        // Local lists (continue watching, guest history) are not paged.
+        if page > 0 && (kind == "continue" || account.cookies().is_none()) {
+            return Ok(vec![]);
+        }
         if kind == "continue" {
             return self.0.progress_list(&account.profile.id, true).await;
         }
@@ -63,7 +85,7 @@ impl Feeds {
                 Ok(vec![])
             };
         }
-        let key = format!("feed:{kind}");
+        let key = format!("feed:{kind}:{page}");
         if !refresh && let Some(json) = self.0.cache_get(&account.profile.id, &key).await? {
             return Ok(serde_json::from_str(&json)?);
         }
@@ -73,6 +95,7 @@ impl Feeds {
         }
         let videos = ytdlp::feed(
             kind,
+            page,
             account.cookies().context("sign in to load this feed")?,
         )
         .await?;
@@ -94,7 +117,7 @@ impl Feeds {
         let feeds = self.clone();
         tokio::spawn(async move {
             for kind in ["recommended", "subscriptions"] {
-                if feeds.feed(&account, kind, false).await.is_err() {
+                if feeds.feed(&account, kind, 0, false).await.is_err() {
                     tracing::debug!(profile_id=%account.profile.id, kind, "feed prefetch failed");
                 }
             }

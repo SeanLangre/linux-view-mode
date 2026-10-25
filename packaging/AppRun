@@ -1,8 +1,19 @@
 #!/bin/bash
 # Starts the CouchTube backend, then opens Firefox in kiosk mode on it.
-# mpv, firefox and yt-dlp come from the host system.
+# Closing the kiosk window shuts everything down. mpv, firefox and yt-dlp come from the host system.
 HERE="$(dirname "$(readlink -f "$0")")"
 PORT="${COUCHTUBE_PORT:-7878}"
+URL="http://127.0.0.1:$PORT"
+DATA="${COUCHTUBE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/couchtube}"
+
+# Already running: don't start a second backend or window.
+if curl -fs "$URL/api/health" >/dev/null 2>&1; then
+    if systemctl --user is-active --quiet couchtube-kiosk 2>/dev/null; then
+        systemctl --user start couchtube-kiosk
+    fi
+    echo "couchtube: already running" >&2
+    exit 0
+fi
 
 for tool in mpv firefox yt-dlp; do
     command -v "$tool" >/dev/null || { echo "couchtube: '$tool' is required but not installed" >&2; exit 1; }
@@ -13,12 +24,27 @@ export COUCHTUBE_MPV_CONFIG="${COUCHTUBE_MPV_CONFIG:-$HERE/usr/share/couchtube/c
 
 "$HERE/usr/bin/couchtube" &
 backend=$!
-trap 'kill "$backend" 2>/dev/null; wait "$backend" 2>/dev/null' EXIT INT TERM
+
+stop_backend() {
+    kill "$backend" 2>/dev/null || return 0
+    # Graceful shutdown stops mpv and the pairing server; force it if that hangs.
+    for _ in $(seq 50); do
+        kill -0 "$backend" 2>/dev/null || break
+        sleep 0.1
+    done
+    kill -KILL "$backend" 2>/dev/null
+    wait "$backend" 2>/dev/null
+}
+trap stop_backend EXIT
+trap 'exit 130' INT TERM
 
 for _ in $(seq 100); do
-    curl -fs "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1 && break
+    curl -fs "$URL/api/health" >/dev/null 2>&1 && break
     kill -0 "$backend" 2>/dev/null || exit 1
     sleep 0.1
 done
 
-firefox --kiosk "http://127.0.0.1:$PORT"
+# Its own profile and instance, as in couchtube-kiosk.service: the window is then a real
+# process that ends when it is closed, and never attaches to the user's normal Firefox.
+mkdir -p "$DATA/kiosk-firefox"
+firefox --kiosk --new-instance --no-remote --profile "$DATA/kiosk-firefox" "$URL"

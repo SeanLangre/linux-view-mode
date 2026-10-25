@@ -266,7 +266,7 @@ impl Database {
     pub async fn set_marked(&self, profile: &str, id: &str) -> Result<()> {
         let profile = profile.to_owned();
         let id = id.to_owned();
-        self.with(move |db| { db.execute("UPDATE progress SET marked=1 WHERE profile_id=?1 AND video_id=?2", params![profile,id])?; db.execute("DELETE FROM feed_cache WHERE profile_id=?1 AND cache_key IN ('feed:recommended','feed:history')", [profile])?; Ok(()) }).await
+        self.with(move |db| { db.execute("UPDATE progress SET marked=1 WHERE profile_id=?1 AND video_id=?2", params![profile,id])?; db.execute("DELETE FROM feed_cache WHERE profile_id=?1 AND (cache_key LIKE 'feed:recommended%' OR cache_key LIKE 'feed:history%')", [profile])?; Ok(()) }).await
     }
 
     pub async fn queue(&self, profile: &str) -> Result<Vec<Video>> {

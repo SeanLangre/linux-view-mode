@@ -15,6 +15,20 @@ export function formatViews(count: number | null): string | null {
   return `${count} views`
 }
 
+/** "3 days ago" for a Unix timestamp in seconds; null if unknown. */
+export function formatAge(timestamp: number | null | undefined, now = Date.now()): string | null {
+  if (timestamp == null) return null
+  const seconds = Math.max(0, now / 1000 - timestamp)
+  const units: [string, number][] = [
+    ['year', 31536000], ['month', 2592000], ['week', 604800], ['day', 86400], ['hour', 3600],
+  ]
+  for (const [name, size] of units) {
+    const n = Math.floor(seconds / size)
+    if (n >= 1) return `${n} ${name}${n > 1 ? 's' : ''} ago`
+  }
+  return 'Just now'
+}
+
 function trim(n: number): string {
   return n >= 10 ? Math.floor(n).toString() : n.toFixed(1).replace(/\.0$/, '')
 }

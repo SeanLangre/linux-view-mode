@@ -85,6 +85,16 @@ struct SearchParams {
     #[serde(default)]
     q: String,
     limit: Option<u32>,
+    #[serde(default)]
+    refresh: bool,
+}
+
+#[derive(Deserialize)]
+struct PageQuery {
+    #[serde(default)]
+    page: u32,
+    #[serde(default)]
+    refresh: bool,
 }
 
 async fn search(
@@ -103,7 +113,7 @@ async fn search(
     };
     state
         .feeds
-        .search(&account, &query, limit)
+        .search(&account, &query, limit, params.refresh)
         .await
         .map(Json)
         .map_err(|err| {
@@ -115,6 +125,7 @@ async fn search(
 async fn channel(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(query): Query<PageQuery>,
 ) -> Result<Json<Channel>, ApiError> {
     if !ytdlp::is_channel_id(&id) {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid channel id"));
@@ -126,7 +137,7 @@ async fn channel(
     };
     state
         .feeds
-        .channel(&account, &id)
+        .channel(&account, &id, query.page.min(ytdlp::MAX_PAGE), query.refresh)
         .await
         .map(Json)
         .map_err(|err| {
@@ -362,8 +373,9 @@ async fn signin(
     Ok(Json(state.profiles.login_status(&id).await))
 }
 
-/// Stop the kiosk service so the desktop shows; the launcher or `systemctl --user start
-/// couchtube-kiosk` brings it back. Only works when the kiosk runs as that systemd unit.
+/// Close the kiosk so the desktop shows. As a systemd unit it is stopped (the launcher or
+/// `systemctl --user start couchtube-kiosk` brings it back); from the AppImage the kiosk
+/// Firefox is closed, which makes `AppRun` shut everything else down.
 async fn exit_to_desktop(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     let active = tokio::process::Command::new("systemctl")
         .args(["--user", "is-active", "--quiet", "couchtube-kiosk"])
@@ -371,13 +383,23 @@ async fn exit_to_desktop(State(state): State<AppState>) -> Result<Json<serde_jso
         .await
         .map(|status| status.success())
         .unwrap_or(false);
-    if !active {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "the kiosk isn't running as a service here; close the window with Alt+F4",
-        ));
-    }
     state.playback.stop().await.map_err(internal)?;
+    if !active {
+        // Only the kiosk Firefox has this profile directory on its command line.
+        let closed = tokio::process::Command::new("pkill")
+            .args(["-TERM", "-f", "kiosk-firefox"])
+            .status()
+            .await
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !closed {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "could not find the kiosk window; close it with Alt+F4",
+            ));
+        }
+        return Ok(Json(json!({"status": "exiting"})));
+    }
     // The stop kills the browser that asked, so don't wait for it.
     tokio::process::Command::new("systemctl")
         .args(["--user", "stop", "--no-block", "couchtube-kiosk"])
@@ -461,15 +483,10 @@ async fn login_status(
     Ok(Json(state.profiles.login_status(&id).await))
 }
 
-#[derive(Deserialize)]
-struct FeedQuery {
-    #[serde(default)]
-    refresh: bool,
-}
 async fn feed(
     State(state): State<AppState>,
     Path(kind): Path<String>,
-    Query(query): Query<FeedQuery>,
+    Query(query): Query<PageQuery>,
 ) -> Result<Json<Vec<Video>>, ApiError> {
     if kind != "continue" && ytdlp::feed_target(&kind).is_none() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "unknown feed"));
@@ -480,7 +497,7 @@ async fn feed(
     };
     state
         .feeds
-        .feed(&account, &kind, query.refresh)
+        .feed(&account, &kind, query.page.min(ytdlp::MAX_PAGE), query.refresh)
         .await
         .map(Json)
         .map_err(|err| {

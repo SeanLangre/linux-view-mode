@@ -9,6 +9,8 @@ export type Video = {
   duration: number | null
   view_count: number | null
   thumb: string
+  /** Upload time, Unix seconds (approximate). */
+  timestamp?: number | null
   resume_position?: number
 }
 
@@ -23,12 +25,14 @@ export type Channel = {
 const CACHE_MS = 10 * 60 * 1000
 const cache = new Map<string, { at: number; promise: Promise<unknown> }>()
 
-function get<T>(path: string): Promise<T> {
+function get<T>(path: string, refresh = false): Promise<T> {
   const cacheKey = `${profileScope}:${path}`
   const hit = cache.get(cacheKey)
-  if (hit && Date.now() - hit.at < CACHE_MS) return hit.promise as Promise<T>
+  if (!refresh && hit && Date.now() - hit.at < CACHE_MS) return hit.promise as Promise<T>
+  if (refresh) cache.delete(cacheKey)
 
-  const promise = fetch(path).then(async (res) => {
+  // `refresh=true` also makes the backend skip its own cache.
+  const promise = fetch(refresh ? `${path}${path.includes('?') ? '&' : '?'}refresh=true` : path).then(async (res) => {
     const body = await res.json().catch(() => null)
     if (!res.ok) throw new Error(body?.error ?? `request failed (${res.status})`)
     return body as T
@@ -38,11 +42,16 @@ function get<T>(path: string): Promise<T> {
   return promise
 }
 
-export const search = (query: string) =>
-  get<Video[]>(`/api/search?q=${encodeURIComponent(query)}`)
+export const search = (query: string, refresh = false) =>
+  get<Video[]>(`/api/search?q=${encodeURIComponent(query)}`, refresh)
 
-export const channel = (id: string) =>
-  get<Channel>(`/api/channel/${encodeURIComponent(id)}`)
+/** Videos per page; a shorter page is the last one. Matches the backend. */
+export const PAGE_SIZE = 24
+/** The backend serves pages 0 to 9. */
+export const MAX_PAGES = 10
+
+export const channel = (id: string, page = 0, refresh = false) =>
+  get<Channel>(`/api/channel/${encodeURIComponent(id)}?page=${page}`, refresh)
 
 export type PlayerStatus = {
   playing: boolean
@@ -107,8 +116,8 @@ export function setProfileScope(id: string) {
 }
 
 export type FeedKind = 'continue' | 'recommended' | 'subscriptions' | 'history' | 'watchlater' | 'liked'
-export const feed = (kind: FeedKind, refresh = false) =>
-  playback<Video[]>(`feed/${kind}${refresh ? '?refresh=true' : ''}`)
+export const feed = (kind: FeedKind, refresh = false, page = 0) =>
+  playback<Video[]>(`feed/${kind}?page=${page}${refresh ? '&refresh=true' : ''}`)
 export const queue = () => playback<Video[]>('queue')
 export const enqueue = (id: string) => playback<Video[]>('queue', { id })
 export const next = () => playback<{ playing: boolean }>('next', {})

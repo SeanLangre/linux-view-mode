@@ -53,6 +53,17 @@ async fn main() -> Result<()> {
             })
             .join("couchtube"),
     };
+    // Two backends must never share the SQLite DB or the Firefox profiles.
+    std::fs::create_dir_all(&data_dir).context("could not create the data directory")?;
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(data_dir.join("couchtube.lock"))
+        .context("could not open the lock file")?;
+    if let Err(std::fs::TryLockError::WouldBlock) = lock.try_lock() {
+        anyhow::bail!("CouchTube is already running (lock held on {}/couchtube.lock)", data_dir.display());
+    }
     let pair_port = match std::env::var("COUCHTUBE_PAIR_PORT") {
         Ok(p) => p.parse().context("COUCHTUBE_PAIR_PORT must be a port number")?,
         Err(_) => DEFAULT_PAIR_PORT,

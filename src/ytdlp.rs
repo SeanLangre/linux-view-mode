@@ -12,6 +12,10 @@ use tokio::process::Command;
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 pub const MAX_QUERY_LEN: usize = 200;
+/// Videos per page of a channel or feed.
+pub const PAGE_SIZE: u32 = 24;
+/// yt-dlp re-reads a feed from the start for every page, so deep pages are capped.
+pub const MAX_PAGE: u32 = 9;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Video {
@@ -23,6 +27,9 @@ pub struct Video {
     pub duration: Option<f64>,
     pub view_count: Option<u64>,
     pub thumb: String,
+    /// Upload time (Unix seconds); approximate for flat YouTube lists. Old cache rows lack it.
+    #[serde(default)]
+    pub timestamp: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_position: Option<f64>,
 }
@@ -40,11 +47,17 @@ pub async fn search(query: &str, limit: u32, firefox: Option<&Path>) -> Result<V
     Ok(parse_playlist(&json)?.videos)
 }
 
-/// A channel's latest `limit` uploads. `id` must pass `is_channel_id`.
-pub async fn channel(id: &str, limit: u32, firefox: Option<&Path>) -> Result<Channel> {
+/// `--playlist-items` range for a zero-based page.
+fn page_items(page: u32) -> String {
+    let start = page * PAGE_SIZE + 1;
+    format!("{start}:{}", start + PAGE_SIZE - 1)
+}
+
+/// One page of a channel's uploads. `id` must pass `is_channel_id`.
+pub async fn channel(id: &str, page: u32, firefox: Option<&Path>) -> Result<Channel> {
     debug_assert!(is_channel_id(id));
     let url = format!("https://www.youtube.com/channel/{id}/videos");
-    let json = run(&url, &["--playlist-end", &limit.to_string()], firefox).await?;
+    let json = run(&url, &["--playlist-items", &page_items(page)], firefox).await?;
     let playlist = parse_playlist(&json)?;
     Ok(Channel {
         id: id.to_string(),
@@ -63,6 +76,7 @@ impl Video {
             duration: None,
             view_count: None,
             thumb: format!("https://i.ytimg.com/vi/{id}/hqdefault.jpg"),
+            timestamp: None,
             resume_position: None,
         }
     }
@@ -79,9 +93,9 @@ pub fn feed_target(kind: &str) -> Option<&'static str> {
     }
 }
 
-pub async fn feed(kind: &str, firefox: &Path) -> Result<Vec<Video>> {
+pub async fn feed(kind: &str, page: u32, firefox: &Path) -> Result<Vec<Video>> {
     let target = feed_target(kind).context("unknown feed")?;
-    let json = run(target, &["--playlist-end", "24"], Some(firefox)).await?;
+    let json = run(target, &["--playlist-items", &page_items(page)], Some(firefox)).await?;
     Ok(parse_playlist(&json)?.videos)
 }
 
@@ -131,7 +145,15 @@ pub fn clean_query(raw: &str) -> Option<String> {
 
 async fn run(target: &str, extra_args: &[&str], firefox: Option<&Path>) -> Result<Vec<u8>> {
     let mut command = Command::new("yt-dlp");
-    command.args(["--ignore-config", "--flat-playlist", "-J", "--no-warnings"]);
+    command.args([
+        "--ignore-config",
+        "--flat-playlist",
+        "-J",
+        "--no-warnings",
+        // Flat lists carry only "3 days ago"; this turns it into a timestamp.
+        "--extractor-args",
+        "youtubetab:approximate_date",
+    ]);
     if let Some(folder) = firefox {
         command
             .arg("--cookies-from-browser")
@@ -187,6 +209,7 @@ struct RawEntry {
     channel_id: Option<String>,
     duration: Option<f64>,
     view_count: Option<u64>,
+    timestamp: Option<i64>,
     #[serde(default)]
     thumbnails: Vec<RawThumb>,
 }
@@ -223,6 +246,7 @@ fn parse_playlist(json: &[u8]) -> Result<Playlist> {
                 duration: e.duration,
                 view_count: e.view_count,
                 thumb,
+                timestamp: e.timestamp,
                 id,
                 resume_position: None,
             })
@@ -257,6 +281,12 @@ mod tests {
     }
 
     #[test]
+    fn page_ranges() {
+        assert_eq!(page_items(0), "1:24");
+        assert_eq!(page_items(1), "25:48");
+    }
+
+    #[test]
     fn query_cleaning() {
         assert_eq!(
             clean_query("  lofi \n beats "),
@@ -278,6 +308,7 @@ mod tests {
                     "channel_id": "UCSJ4gkVC6NrvII8umztf0Ow",
                     "duration": null,
                     "view_count": 16684606,
+                    "timestamp": 1760000000,
                     "thumbnails": [
                         {"url": "https://i.ytimg.com/small.jpg", "width": 360},
                         {"url": "https://i.ytimg.com/big.jpg", "width": 720}
@@ -292,6 +323,8 @@ mod tests {
         assert_eq!(videos.len(), 2);
         assert_eq!(videos[0].thumb, "https://i.ytimg.com/big.jpg");
         assert_eq!(videos[0].duration, None);
+        assert_eq!(videos[0].timestamp, Some(1760000000));
+        assert_eq!(videos[1].timestamp, None);
         assert_eq!(videos[1].channel.as_deref(), Some("Blender"));
         assert_eq!(videos[1].title, "Untitled");
         assert_eq!(
