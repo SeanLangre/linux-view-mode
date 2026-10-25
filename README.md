@@ -65,48 +65,37 @@ and open `http://127.0.0.1:5173`. Vite forwards `/api` calls to the backend (wit
 
 ## Profiles and sign-in
 
-1. On **Who’s watching?**, choose **Add profile**, enter a name and choose a colour, then press **Create and sign in**. A QR code for your phone appears first; Firefox opens only when you choose **Open Firefox sign-in**.
-2. Sign in with the **phone keyboard** (CouchTube's QR code, below) or the TV keyboard. If Google offers **Try another way** on its page, a passkey or a "Tap Yes" prompt on your phone avoids typing the password at all; this depends on the account, which CouchTube never asks you to change, and is untested here (see `TODO.md`). Choose **Open Firefox sign-in**. A separate Firefox window opens on a start page; press **Enter** to continue to Google. Sign in with the TV keyboard or the phone and complete any verification. The window closes by itself a few seconds after YouTube's login cookie appears; to give up, close it with **Alt+F4**.
+1. On **Who’s watching?**, choose **Add profile**, enter a name and colour, then **Create and sign in**. The next page shows a QR code for your phone.
+2. Sign in with the **phone keyboard** or the TV keyboard. Scan the QR code and press **Yes, that's my phone** (see below), and a separate Firefox window opens straight on Google's sign-in page. To use the TV keyboard instead, choose **Open Firefox sign-in**. Complete any verification Google asks for. Google chooses the method (a 2-step code or a phone prompt) and CouchTube can't influence it. The window closes by itself a few seconds after YouTube's login cookie appears; to give up, close it with **Alt+F4**.
 3. Wait for **YouTube sign-in works**, then choose **Continue to CouchTube**. A failed check can mean a connection or yt-dlp problem; use **Check sign-in** or **Open sign-in again** to retry.
-4. Press **P** while browsing to switch profiles. On the picker, highlight a named profile and press **S** to open sign-in (this opens Firefox straight away) or **D** to remove it (with confirmation).
+4. Press **P** while browsing to switch profiles. On the picker, press **S** on a named profile to open sign-in (Firefox opens straight away) or **D** to remove it (with confirmation).
 
-Each account has its own Firefox folder; Guest never loads account cookies. A named profile with no cookie database browses signed out. Profiles and the active selection persist in SQLite, while the picker still appears on startup. Switching profiles stops mpv and opens Home for the selected person. Search results, feeds, recent searches, resume positions and queues are separated by profile. Removing a profile deletes its local sign-in files; deleting the active profile selects Guest.
+Each account has its own Firefox folder; Guest never loads account cookies, and a named profile with no cookie database browses signed out. Search results, feeds, recent searches, resume positions and queues are separated by profile. Removing a profile deletes its local sign-in files; deleting the active profile selects Guest.
 
 ### Signing in from your phone
 
-The QR code (shown in the CouchTube window) opens a page on your phone that works as a keyboard for the Firefox sign-in window. It does not log in for you and does not use Bluetooth.
+The QR code opens a page on your phone that works as a keyboard for the Firefox sign-in window. It does not log in for you and does not use Bluetooth.
 
-How it works: from when you create the profile (or open sign-in) until the sign-in window closes, the backend opens port 7879, creates a random 128-bit token and a random 256-bit key, and shows `http://<server LAN address>:7879/p/<token>#<key>` as a QR code (and as text under it). The phone page reads the key from the part after `#` (which browsers never send), removes it from the address bar, and seals everything it sends with it. The backend decrypts each message, checks it, and types it into the Firefox window with `xdotool`. Replayed messages and messages sent to the wrong step are rejected. Closing the sign-in window ends the session, closes the port, and the link stops working.
+**How it works:** while the login page is open, the backend listens on port 7879 with a random 128-bit token and a random 256-bit key, shown as `http://<server LAN address>:7879/p/<token>#<key>` (QR code and text). The phone page reads the key after the `#` (browsers never send it), removes it from the address bar, and seals everything it sends. The backend decrypts and checks each message (replayed or wrong-step messages are rejected) and types it into the Firefox window with `xdotool`. Closing the sign-in window ends the session and closes the port.
 
-Using it: scan the QR code (or type the whole link, including everything after `#`) and keep the phone page open. The phone shows a 6-digit code and the TV asks "Does it show this code?": press **Yes, that's my phone** if they match, or **No** if not (the QR code is then replaced and the old link stops working). Nothing can be typed until you confirm, and a second phone can't join afterwards. Confirm before you continue to Google, because the TV can't show the question once Firefox is on Google's pages. Press Enter on the TV to continue to Google so the email field is showing. On the phone, do the steps in order: **1. Email** (typed, then Enter), then once the TV shows the password page, **2. Password** (typed, then Enter, so a password manager can fill it), then **3. 2-step code** if Google asks. Approve any 2-step prompt on your phone. Use the TV keyboard for anything else.
+**Using it:** scan the QR code and keep the phone page open. The phone shows a 6-digit code and the TV asks "Does it show this code?". Press **Yes, that's my phone** if they match, or **No** if not (the QR code is replaced and the old link stops working). Nothing can be typed until you confirm, and a second phone can't join afterwards. Firefox opens on Google when you press **Yes**. On the phone, go in order: **1. Email**, then once the TV shows the password page **2. Password**, then **3. 2-step code** if Google asks. Use the TV keyboard for anything else.
 
-Safety:
-- **What you type is encrypted, but only against passive listening.** The page is plain HTTP. The QR code's link carries a one-time key after the `#` (browsers never send that part), and everything the phone sends is sealed with it, so someone merely sniffing the Wi-Fi sees only ciphertext. The phone and TV also both show a 6-digit code; press **Yes** on the TV only if they match, otherwise press **No** and the link is replaced. Someone who can tamper with the network (ARP spoofing, a rogue access point) can still rewrite the page and read everything, because the phone has no way to check a plain-HTTP page. **On shared Wi-Fi, use the TV keyboard instead.**
-  - How that attack works: someone on your network (ARP spoofing, a rogue access point or a hacked router) passes the phone's request to the TV but adds a line to the page, which can read the key because it runs where the `#key` link opened. Everything then looks normal on both screens and the codes match. They need to be on your network during the few minutes a sign-in is open. 2-step codes work once, which limits the damage, but the password would leak.
-  - What would stop it: HTTPS with a certificate the phone trusts (for example a Let's Encrypt certificate for a domain you own, pointing at the TV's LAN address), or a native phone app. Neither is planned; the TV keyboard is the fallback and sends nothing over the network.
-  - The TV side isn't encrypted because it never leaves the machine: the TV UI talks to the backend over `127.0.0.1`, and the code and link on screen are only visible to people in the room.
-- **Port 7879 is the only part of CouchTube reachable from the network, and only while a sign-in is in progress.** If you never open Firefox, the link expires after 15 minutes or when you leave the screen. The main API stays on `127.0.0.1` and rejects requests with any other `Host`. The pairing port answers only to the live token, with 404 for anything else. The link now includes the key, so don't show the TV screen to people you don't trust during sign-in; someone with a photo of the QR code still can't type until you confirm a code that matches their phone, and a mismatch means press **No**.
-- Typed text is never logged. It is sent to `xdotool` on stdin (not visible in `ps`) without a shell, and is limited to 256 characters on one line.
-- Typing fails closed: if the sign-in window can't be found or doesn't take focus, nothing is typed.
-- Each of email, password and code can be sent up to 3 times per sign-in (so a typo can be fixed). After that the phone page says to use the TV keyboard.
-- Keep port 7879 closed to the internet. Do not forward it on your router.
+**Safety:**
+- **Encrypted only against passive listening.** The page is plain HTTP, so someone who can tamper with the network (ARP spoofing, a rogue access point, a hacked router) can rewrite the page, read the key and see everything, with matching codes. They would have to act during the few minutes a sign-in is open. **On shared Wi-Fi, use the TV keyboard instead.** Only HTTPS with a certificate the phone trusts, or a native app, would fix it; neither is planned. See `encryption-plan.md`.
+- **Port 7879 is the only part of CouchTube reachable from the network, and only while a sign-in is in progress.** An unused link expires after 15 minutes or when you leave the screen. The main API stays on `127.0.0.1` and rejects other `Host` headers. Don't forward the port on your router, and don't show the TV screen to people you don't trust, since it shows the key.
+- Typed text is never logged. It goes to `xdotool` on stdin (not in `ps`), without a shell, limited to 256 characters on one line. If the window can't be found or focused, nothing is typed.
+- Email, password and code can each be sent up to 3 times per sign-in. After that the phone page says to use the TV keyboard.
 
-Limits:
-- Needs `xdotool`. If it is missing, the phone page shows "the TV could not type".
-- Firefox is started with `MOZ_ENABLE_WAYLAND=0` so that `xdotool` can reach it under XWayland. There is no equivalent that works on KDE's Wayland.
-- If you scan with the key missing (for example by retyping the link without the `#...` part), the phone page says to scan the QR code again.
-- Some phone password managers refuse to fill on `http://` pages. If yours does, copy the password from it and paste it into the field.
-- You choose when to send the password: if you tap it while the email page is still showing, it is typed into the email field and can appear on the TV screen. Wait for the password page.
-- The phone cannot see the TV screen, and it cannot click a field for you. The email field must already be focused on the TV.
-- If you run the backend as a systemd service, set `DISPLAY` for it, or `xdotool` cannot find the window.
-- The phone and the server must be on the same network. Guest networks and routers with client isolation block it.
-- If the server has a firewall, allow the port for your home network only, for example `sudo ufw allow from 192.168.50.0/24 to any port 7879 proto tcp`.
-- The address in the QR code is the one the OS uses to reach the outside. With a VPN or several network cards it may be the wrong one.
-- Phones may ask for "Local network" or "Nearby devices" permission in the browser. Allow it so the page can load.
+**Limits:**
+- Needs `xdotool`. Firefox is started with `MOZ_ENABLE_WAYLAND=0` so `xdotool` can reach it under XWayland (no equivalent on KDE's Wayland). Under systemd, set `DISPLAY` for the service.
+- The phone and server must be on the same network; guest networks and client isolation block it. With a VPN or several network cards the QR address may be wrong. Phones may ask for "Local network" permission; allow it. With a firewall, allow the port for your home network only, e.g. `sudo ufw allow from 192.168.50.0/24 to any port 7879 proto tcp`.
+- Some phone password managers refuse to fill on `http://` pages; copy the password and paste it.
+- The phone can't see the TV or click a field. The email field must already be focused. If you send the password while the email page is still showing, it is typed (and visible) in the email field, so wait for the password page.
+- If the key is missing from the link (retyped without `#...`), the phone page says to scan again.
 
-These weaknesses and the planned fixes are tracked under **Sign-in review** in [`TODO.md`](TODO.md).
+Weaknesses and planned fixes are tracked in [`TODO.md`](TODO.md).
 
-The sign-in check requests one item from the account’s subscriptions. Home shows **Continue watching**, **Recommended**, and **Subscriptions**. The Home menu opens **History**, **Watch later**, **Liked**, and **Queue**. Guest and profiles without cookies have local watch history and can search, queue and resume videos; account feeds stay empty until sign-in. Daily cookie refresh is planned for deployment.
+The sign-in check requests one item from the account’s subscriptions. Home shows **Continue watching**, **Recommended** and **Subscriptions**; its menu opens **History**, **Watch later**, **Liked** and **Queue**. Guest and profiles without cookies have local watch history and can search, queue and resume; account feeds stay empty until sign-in. Daily cookie refresh is planned for deployment.
 
 ### Watching, resume and queue
 
@@ -117,7 +106,7 @@ The sign-in check requests one item from the account’s subscriptions. Home sho
 - After roughly 30–35 seconds of viewing, a signed-in profile runs `yt-dlp --simulate --mark-watched` once for that video. Paused time and the distance skipped by seeking do not count as viewing. Failure is logged and can retry during a later viewing. Guest never sends watched-history updates.
 - **U** refreshes the current Home/account feed or queue. Recommended, Subscriptions, Watch Later and Liked are cached per profile for 10 minutes; history for 2 minutes; searches for 30 minutes and channels for 10 minutes. Selecting an account prefetches Recommended and Subscriptions. The browser also briefly caches search/channel results.
 
-Automated checks use simulated accounts and watched-history requests. The new personal feeds and YouTube history update still need verification with a real account.
+Automated checks use simulated accounts and watched-history requests. Checked with a real account on 2026-10-25: after a 68 s viewing the video was first in the profile's YouTube history (read back with `yt-dlp :ythis`). Rewatching and the personal feeds still need a real-account check.
 
 `config/firefox/user.js` is copied into account profiles automatically. The supplied extension policy installs uBlock Origin and SponsorBlock when deployed to Firefox’s system policy directory. To enable it on this dev machine, first review the file and any existing `/etc/firefox/policies/policies.json`, then merge or install it there and restart Firefox. CouchTube does not change system Firefox policies automatically. See [Mozilla’s ExtensionSettings reference](https://firefox-admin-docs.mozilla.org/reference/policies/extensionsettings/).
 
@@ -161,7 +150,7 @@ If it happens again, note the video ID, whether the picture freezes or breaks up
 | DELETE | `/api/profiles/<id>` | Removes the profile and its local sign-in files |
 | POST | `/api/profiles/<id>/select` | Selects a profile and stops playback |
 | POST | `/api/profiles/<id>/signin` | Opens that profile’s Firefox sign-in window |
-| GET/POST/DELETE | `/api/pairing` | Phone URL and QR code (SVG) while a sign-in is in progress, otherwise 404; POST starts it before Firefox opens, DELETE cancels it if no window is open |
+| GET/POST/DELETE | `/api/pairing` | Phone URL and QR code (SVG) while a sign-in is in progress, otherwise 404; POST starts it before Firefox opens (the login page does this when it opens), DELETE cancels it if no window is open |
 | GET | `/api/profiles/<id>/status` | `{state, message}`; `?check=true` starts a login check |
 | POST | `/api/system/exit` | Stops the kiosk service (only when it runs as the systemd unit) |
 | GET | `/api/health` | `{"status":"ok"}` |

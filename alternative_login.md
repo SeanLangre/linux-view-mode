@@ -22,8 +22,8 @@ What we learned:
 - **Users must not be asked to change their account.** So passkey and prompt can only ever be a
   bonus for accounts that already offer them. They can't be the recommended path or the fix for
   the password crossing the Wi-Fi.
-- **Wording was tried and removed.** Text promising passkeys was added to `src/signin.html`,
-  `src/pairing.html` and `frontend/src/ProfileGate.tsx`, then taken out by the user. Don't
+- **Wording was tried and removed.** Text promising passkeys was added to `src/pairing.html`
+  and `frontend/src/ProfileGate.tsx`, then taken out by the user. Don't
   reintroduce it unless the tests below show it works. If it comes back, make it conditional
   ("if Google offers *Try another way*"), never a step.
 - **Phone keyboard stays the main path**, so [`encryption-plan.md`](encryption-plan.md) is still
@@ -72,23 +72,12 @@ The rejected option was signing in on another browser and copying the cookies to
   (prompt bombing), and the number match is only partial protection. Fine as a second choice.
 
 ## What would change in CouchTube (not applied, see Status)
-These were drafted, then reverted. Apply them only if the tests show passkeys or prompts work,
-and word them as optional ("if Google offers *Try another way*").
-
-| Where | Change |
-|---|---|
-| `src/signin.html` | Above "Continue to Google sign-in", say how to sign in without a password: "After your email, choose **Use your passkey** and scan the QR code with your phone, or approve the prompt on your phone. Use the phone keyboard or TV keyboard only if Google asks for a password." |
-| `src/pairing.html` | Lead with the email step; label the password step "Only if Google asks for a password"; repeat the passkey and prompt hint |
-| `frontend/src/ProfileGate.tsx` | The same short hint next to the phone QR code, so the user doesn't confuse CouchTube's QR code (phone keyboard) with Firefox's (passkey) |
-| `plan.md`, `README.md` | Describe the recommended sign-in order: passkey, then Google prompt, then phone keyboard, then TV keyboard |
-| `deploy/couchtube.service` | Only if the tests below show Firefox can't reach Bluetooth when started by the service: pass the D-Bus environment it needs |
-
-The cookie handling doesn't change: the sign-in window still closes once `LOGIN_INFO` appears
-three times in a row (`src/profiles.rs`), whichever way the user signed in.
-
-Two QR codes can be on screen at different times: CouchTube's (opens the phone keyboard page) and
-Firefox's (passkey). The wording above has to make clear which is which. Firefox's appears only
-after **Use your passkey** is chosen, so they're never shown together.
+Only if the tests show passkeys or prompts work, and worded as optional ("if Google offers *Try another
+way*"): a short hint in `src/pairing.html` and next to the QR code in `frontend/src/ProfileGate.tsx`
+(so users don't confuse CouchTube's QR code with Firefox's passkey QR code), a recommended order in
+`plan.md` and `README.md` (passkey, Google prompt, phone keyboard, TV keyboard), and the D-Bus
+environment in `deploy/couchtube.service` if Firefox can't reach Bluetooth under the service.
+Cookie handling doesn't change: the window still closes once `LOGIN_INFO` is seen three times.
 
 ## Effect on the encryption plan
 - If passkeys work: the phone keyboard sends only the email, plus a password or 2-step code if
@@ -102,7 +91,7 @@ after **Use your passkey** is chosen, so they're never shown together.
 ## Tests to do first (decide before writing code)
 Run these only with an account that already has a passkey or phone prompt. A test account that
 shows just the password page (like the user's) can't pass them. In CouchTube the route is: create
-a profile, **Open Firefox sign-in**, Enter, email, then **Try another way** on the password page.
+a profile, **Open Firefox sign-in**, email, then **Try another way** on the password page.
 
 1. **Passkeys on the dev machine** (Firefox 157, Bluetooth adapter present): start the sign-in
    profile the same way CouchTube does (`firefox --new-instance --no-remote --profile <dir>`), go

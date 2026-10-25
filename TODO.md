@@ -4,31 +4,33 @@ Checklist for [`plan.md`](plan.md). Tick items as they're done; move finished se
 
 ## Top priority
 
-- [ ] Check whether watched videos are added to the profile's YouTube history
-  - Already built: after ≥30 s of real watch time, `Playback::save` (`src/playback.rs`) runs `yt-dlp --mark-watched --simulate` with the profile's cookies (`ytdlp::mark_watched`). On success it sets `progress.marked=1`. Guest has no cookies, so its watches stay local only.
-  - Test (same as the Phase 5 item below): on a signed-in profile, watch ≥35 s. Then check the backend log for `YouTube watched-history sync failed`, run `SELECT video_id, watched, marked FROM progress` in the profile DB, and check youtube.com/feed/history in that profile's Firefox.
-  - Rewatch gap fixed 2026-10-25: `Database::begin_viewing` (called from `Playback::play`) resets `watched` and `marked`, so every viewing ≥30 s is sent again. Untested against real YouTube.
+- [ ] YouTube history sync: first watch verified, rewatch left
+  - Built: after ≥30 s of real watch time, `Playback::save` runs `yt-dlp --mark-watched --simulate` with the profile's cookies and sets `progress.marked=1`. Guest has no cookies, so it stays local.
+  - Verified 2026-10-25: 68 s watched, `marked=1`, and `yt-dlp :ythis` (profile cookies) lists the video first.
+  - To test: rewatch the same video ≥30 s. `Database::begin_viewing` should reset `watched`/`marked` and send it again.
 
-- [ ] Only one instance at a time / closing the window shuts everything down — implemented 2026-10-25, still to test on a real run
-  - Done: backend `flock` on `$data_dir/couchtube.lock` (checked: a second backend exits with a message). `AppRun` exits if `/api/health` already answers (starts `couchtube-kiosk` if that unit is active), starts Firefox with `--new-instance --no-remote --profile $DATA/kiosk-firefox`, and its trap kills the backend with a 5 s `KILL` fallback. "Exit to desktop" now closes the kiosk Firefox (`pkill -f kiosk-firefox`) when not under systemd.
-  - Checked 2026-10-25 (AppImage): after quitting, `pgrep -a 'couchtube|mpv|firefox|yt-dlp'` printed nothing. Still to check: closing the window via the Firefox X (not mpv quit) and with a sign-in Firefox open, a second launch while one runs, "Exit to desktop"; README/`install.sh` wording for the systemd units (drop or keep as optional appliance mode).
+- [ ] Single instance / closing the window shuts everything down (implemented 2026-10-25)
+  - Built: backend `flock` on `$data_dir/couchtube.lock`; `AppRun` exits if `/api/health` answers, runs the kiosk Firefox with its own profile and kills the backend on exit (5 s `KILL` fallback); "Exit to desktop" closes the kiosk Firefox when not under systemd.
+  - Checked (AppImage): after quitting, `pgrep -a 'couchtube|mpv|firefox|yt-dlp'` printed nothing.
+  - To check: closing via the Firefox X, closing with a sign-in Firefox open, a second launch while one runs, "Exit to desktop". Then decide the README/`install.sh` wording for the systemd units (drop, or keep as optional appliance mode).
 
-- [ ] Login page change 2026-10-25 (untested on a real run): the QR code is only on the app's login page; **Open Firefox sign-in** goes straight to Google (`/signin` and `signin.html` removed)
-  - Possible issue (2026-10-25): after this change Google asked for a 2FA code instead of "click to approve" on the phone. The Firefox command, `user.js`, profile and URL are unchanged. The only difference is that Firefox used to open on the local `/signin` page and a link click went to Google (so Google got a `Referer: http://127.0.0.1:…` header and a different click path), while it now starts directly on Google. We can't see why Google would use either to choose the 2FA method, and a new profile with no sign-in history is a likelier cause. If the tap prompt doesn't come back, test by restoring a local start page that links to Google.
+- [ ] Login page change (2026-10-25, untested on a real run): QR code only on the app's login page; **Yes, that's my phone** (or **Open Firefox sign-in**) opens Firefox straight on Google. `/signin` and `signin.html` are removed.
+  - Possible issue: Google then asked for a 2FA code instead of "click to approve". Firefox command, `user.js`, profile and URL are unchanged; the only difference is the missing `Referer: http://127.0.0.1:…` and click path from the old local start page. We can't see why Google would use either, and a new profile with no history is likelier. If the tap prompt doesn't come back, restore a local start page that links to Google and compare.
 
-## Sign-in follow-ups (second review, 2026-10-21)
+## Sign-in follow-ups
 
-- [x] (done 2026-10-21; a real phone sign-in with confirmation worked. Still to run from `encryption-plan.md`: the `tcpdump` check, the second-phone test (codes differ, **No**, new QR code, old link 404) and the confirmation prompt on the app's login page) Encrypt the phone form against passive Wi-Fi sniffing: one-time key in the QR URL `#fragment`, inline crypto (e.g. tweetnacl; no WebCrypto on plain HTTP). Remaining main risk
+- [ ] Run the rest of `encryption-plan.md`: the `tcpdump` check, the second-phone test (codes differ, **No**, new QR code, old link 404) and the confirmation prompt on the login page. (Encrypted sign-in itself is done; a real phone sign-in with confirmation worked 2026-10-21.)
 - [ ] (Accepted, low) `type_and_enter`: the second focus check only guards Enter; if focus moves mid-typing (up to ~3 s for 256 characters) the text already went elsewhere
 
-## Alternative login tests (`alternative_login.md`; wording is already in the UI and docs, results decide what stays)
+## Alternative login tests (`alternative_login.md`)
 
-- [x] Result 2026-10-21: on the user's real account, Google's password page offered no "Try another way". The account isn't to be changed, so passkey/prompt is only a bonus where available; the phone keyboard and `encryption-plan.md` stay the main path
-✓? Record the Firefox version
+Result 2026-10-21: on the user's real account Google's password page offered no "Try another way". The account isn't to be changed, so passkey/prompt is only a bonus; the phone keyboard and `encryption-plan.md` stay the main path. The tests below need an account that has a passkey or phone prompt.
+
+- [ ] Passkey QR sign-in in Firefox on the dev machine (record the Firefox version)
 - [ ] Same, with Firefox started by the `couchtube` systemd user unit; if Bluetooth/D-Bus is missing, pass the D-Bus environment in `deploy/couchtube.service`
 - [ ] Google prompt: email only; does Google skip the password, and do the cookies work afterwards?
 - [ ] Daily cookie refresh still works for a passkey-signed-in profile
-- [ ] Depending on results, reduce `encryption-plan.md` (see "Effect on the encryption plan")
+- [ ] Depending on results, reduce `encryption-plan.md`
 
 ## Phase 0 — Server checks (after the Arch install)
 
@@ -36,7 +38,7 @@ Checklist for [`plan.md`](plan.md). Tick items as they're done; move finished se
 - [ ] mpv plays 1080p smoothly with hardware decoding
 - [ ] mpv shows above the Firefox kiosk, focus returns afterwards
 - [ ] yt-dlp with one signed-in Firefox profile returns `:ytrec`
-- [ ] `--mark-watched` shows up in YouTube history
+- [x] `--mark-watched` shows up in YouTube history (2026-10-25, dev machine)
 - [ ] Login still works after 2–3 days
 
 ## Phase 7 — Polish
@@ -48,8 +50,8 @@ Checklist for [`plan.md`](plan.md). Tick items as they're done; move finished se
 
 ## Known issues
 
-- [ ] Follow up on the reported mpv warnings: `client removed during hook handling`, `Packet corrupt`, `Invalid OBU length`, and `Failed to parse temporal unit`. The log confirms AV1 1080p59.94 playback with VA-API; whether playback visibly failed or the user quit at ~20 s is not confirmed. Record the video ID and reproduction steps if it recurs. 2026-10-25, AppImage run: the same warnings appeared on a 40-minute AV1 1080p video (uploader Watcher, uploaded 2026-10-22), but the user said the video looked fine, so no change. Only switch `ytdl-format` away from AV1 (e.g. `[vcodec!^=av01]`) if playback visibly breaks.
-- **Top priority batch (2026-10-25)**, code and unit tests done, not tried with a real account:
-  - Upload date: `--extractor-args youtubetab:approximate_date` (verified live: channel and search entries get `timestamp`), `Video.timestamp`, `formatAge()` on the card meta line.
-  - Refresh: `U` now passes `refresh=true` for search/channel/feed pages and drops the frontend cache key; "Refreshing…" toast. Still open from the old item: F5 in the kiosk doesn't refresh, and Recommended may legitimately return the same videos.
-  - Load more: `?page=N` (24 per page, max 10 pages) on `/api/channel/{id}` and `/api/feed/{kind}`; cache keys `…:{page}`; `set_marked` uses `LIKE`; ↓ on the last row loads the next page (deduplicated, skeleton row, stops on a short or all-duplicate page). Home menu has Recommended and Subscriptions.
+- [ ] mpv warnings (`client removed during hook handling`, `Packet corrupt`, `Invalid OBU length`, `Failed to parse temporal unit`) on AV1 1080p59.94 with VA-API. Seen twice (including a 40-minute video on 2026-10-25) and playback looked fine. Only switch `ytdl-format` away from AV1 (e.g. `[vcodec!^=av01]`) if playback visibly breaks; record the video ID if it recurs.
+- [ ] 2026-10-25 batch, code and unit tests done, not tried with a real account:
+  - Upload date on cards (`approximate_date`, `Video.timestamp`, `formatAge()`).
+  - `U` refresh passes `refresh=true` and drops the frontend cache key. Still open: F5 in the kiosk doesn't refresh, and Recommended may legitimately return the same videos.
+  - Load more: `?page=N` (24 per page, max 10) on `/api/channel/{id}` and `/api/feed/{kind}`; ↓ on the last row loads the next page.

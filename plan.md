@@ -4,7 +4,7 @@ A fullscreen, keyboard-only YouTube interface for the Arch Linux server connecte
 
 How to run the code is in `README.md`; the working checklist is `TODO.md`.
 
-### Status (2026-10-21)
+### Status (2026-10-25)
 | Phase | State |
 |---|---|
 | Server setup (Windows → Arch) | Not started |
@@ -13,7 +13,7 @@ How to run the code is in `README.md`; the working checklist is `TODO.md`.
 | 2 — TV interface | ✅ Done (still to try in `firefox --kiosk`) |
 | 3 — Playback | Implemented; user test positive, explicit focus check pending |
 | 4 — Profiles and sign-in | Implemented with phone pairing; user test positive, two-account check and sign-in review fixes pending |
-| 5 — Account feeds | Implemented; real-account verification pending |
+| 5 — Account feeds | Implemented; history sync verified for a first watch, rewatch and feed contents pending |
 | 6 — Deploy | Written (`deploy/`, exit to desktop); not yet run on the server; auto-login/power settings manual |
 | 7 — Polish | Not started |
 
@@ -80,13 +80,13 @@ How to run the code is in `README.md`; the working checklist is `TODO.md`.
 ### Signing in (once per account, from the TV)
 1. "Add account" in the UI → backend opens a separate Firefox window (X11 mode, `MOZ_ENABLE_WAYLAND=0`):
    `firefox --new-instance --no-remote --profile <dir> https://accounts.google.com/ServiceLogin?continue=https://www.youtube.com`
-   Before that, the UI shows the phone-pairing QR code; Firefox opens only when the user chooses **Open Firefox sign-in**. The start page links to `accounts.google.com/ServiceLogin?continue=https://www.youtube.com`.
+   The login page in the app shows the phone-pairing QR code first. Firefox opens straight on Google (no local start page) when the user presses **Yes, that's my phone** after checking the code, or **Open Firefox sign-in** to use the TV keyboard. Open question: Google asked for a 2FA code instead of a tap after this change; the only difference is the missing local `Referer` and click path (see `TODO.md`).
 2. Sign in with the phone keyboard (see below) or the TV keyboard. If the account already offers a passkey or phone prompt under Google's "Try another way" (see `alternative_login.md`), the user can use that instead; CouchTube doesn't require or ask for any account change. On the first real test the account offered nothing but the password, so phone keyboard plus encryption (`encryption-plan.md`) stays the main path. Whichever way, the cookies are the same and the window closes as in step 3.
 3. The backend polls the profile's `cookies.sqlite` (a copy, since Firefox holds it open) every 2 s. Once YouTube's `LOGIN_INFO` cookie has been seen three times in a row, it closes Firefox so the cookies are flushed.
 4. Backend checks the login works by fetching one item of `:ytsubs`. The profile shows a ✓ or "Sign in again".
 
 ### Phone pairing (`pairing.rs`)
-- From when the profile is created (or sign-in opened) until the sign-in window closes, a random 128-bit token is live; the CouchTube UI shows `http://<LAN IP>:7879/p/<token>` as a QR code and as text. Before Firefox opens, typing is refused with "window isn't open yet" (HTTP 425), and an unused session expires after 15 minutes or when the user leaves the screen. Closing the window ends the token.
+- From when the profile is created (or sign-in opened) until the sign-in window closes, a random 128-bit token is live; the CouchTube login page shows `http://<LAN IP>:7879/p/<token>` as a QR code and as text. Before Firefox opens, typing is refused with "window isn't open yet" (HTTP 425), and an unused session expires after 15 minutes or when the user leaves the screen. Closing the window ends the token.
 - Security notes for the encryption: the key is in `Session` memory only and ends with the session; the URL containing it must never be logged (a comment at `info()` says so); the phone also keeps the key in its tab's `sessionStorage` so a reload works, and it is gone when the tab closes. The TV side is plaintext on purpose (localhost only; the on-screen code is only visible in the room). Details and the active-attacker analysis are in `encryption-plan.md`.
 - The phone page has three steps, each a separate request: email, password, and an optional 2-step code. Each types the text into the Firefox window and presses Enter. The email and password steps work once per session (a failed attempt is given back); the code step up to 3 times. There are no other typing routes.
 - Typing fails closed: the window is found by process id, focused, and focus is checked before typing and before Enter. The text goes to `xdotool type --file -` on stdin, never as an argument. `--window` isn't used because it sends synthetic events Firefox ignores.
@@ -273,53 +273,12 @@ Phases 1–5 run on the dev machine, so they don't have to wait for the server's
 - Run the `:ytrec` command again after 2–3 days, without opening Firefox, to see whether the login lasts.
 - **Done when:** everything works, or each problem has a known fix.
 
-### Phase 1 — Backend skeleton (dev machine) ✅ done 2026-10-20
-- Axum on `127.0.0.1:7878`, `ytdlp.rs` with search signed out, `/api/search`, serves `frontend/dist`.
-- Measured: yt-dlp search takes about 1.2 s on the dev machine.
-- **Done when:** `curl '127.0.0.1:7878/api/search?q=lofi'` returns clean JSON.
-
-### Phase 2 — TV interface ✅ done 2026-10-20
-Tested by driving the built app in headless Chromium at 1920×1080 with real key presses; still to try in `firefox --kiosk`. Added `/api/channel/:id` for the Channel screen.
-- Vite + React + TS. Dev proxy `/api` → `:7878`.
-- Screens: Home, Search, Results, Channel.
-- 2D grid navigation: a visible focus ring, the focused card scrolled into view, and a remembered focus position per screen.
-- 10-foot styling: dark theme, large text (≥ 24 px at 1080p), 16:9 thumbnails, nothing important near the screen edges, light on the RN96's GPU.
-- Phase 2 initially used Music/Nature/Science placeholder rows. Phase 5 replaced them with account feeds. Enter launches mpv (added in Phase 3).
-- The first-search Home focus quirk was fixed in Phase 5: recent searches follow the stable video rows, with a browser regression test.
-- **Done when:** you can search and browse with the keyboard only, in `firefox --kiosk`.
-
-### Phase 3 — Playback — implemented, user test positive
-Backend tests cover process replacement, stop, failed exits and IPC replies; frontend tests cover playback requests and uncached status. A headless smoke test with real mpv and local audio passed (API validation, title/position/pause, replacement, quit, stop and backend shutdown). SponsorBlock has a Lua test for skipping and failure handling. The Firefox kiosk/KDE stacking and focus check remains manual.
-- `player.rs`: mpv with `--fullscreen --hwdec=vaapi --ytdl-format=… --input-ipc-server=$XDG_RUNTIME_DIR/couchtube-<session>/ipc --config-dir=…`, one player at a time, reads `time-pos` and `duration` over IPC.
-- SponsorBlock mpv script (paid sponsor segments; `curl`, asynchronous, leaves playback running on failure).
-- The UI shows "Playing: <title>" while mpv runs.
-- Enter calls `/api/play`; status is polled without caching, and the screen/focus stay in place during playback.
-- Browser test: Firefox kiosk + mpv on top on KDE Wayland can be checked on the dev machine already (same desktop as the server).
-- **Done when:** Enter plays, Esc returns to the same card.
-
-### Phase 4 — Profiles and sign-in — implemented, user test positive
-- SQLite stores profile names/colours and active selection; profile folders are private (`0700`) and the database is `0600`.
-- The extension policy is supplied in `config/firefox/policies.json`; deployment to system Firefox policies remains manual until Phase 6.
-- Search and channel requests use the selected profile’s cookies and run one at a time per profile. mpv receives the same cookie source. Guest ignores desktop yt-dlp config and never loads account cookies.
-- The picker opens at startup; `p` opens it while browsing. Browser caches and recent searches are separated by profile.
-- Sign-in status tracks Firefox opening/closing and a single-item `:ytsubs` check, with a manual retry.
-- Verified with simulated account tools: isolation of cookies, Guest, login/check failures, deletion and restart persistence. Headless Chromium exercised Guest → add/sign-in → playback/return → remove → switch using keyboard events. Real mpv IPC confirmed cookie paths with spaces/commas are passed correctly. The user subsequently reported the real profile/sign-in flow worked well (2026-10-20). The exact two-account switching check remains to be confirmed.
-- "Who's watching?" screen, add/remove profile, Firefox profile setup (`user.js`, uBlock Origin, SponsorBlock), sign-in window, login check, Guest profile.
-- Phone pairing (QR code → LAN page → `xdotool` types email and password) added 2026-10-21; the sign-in window now closes itself once the login cookie appears. A safety/accessibility review the same day was then implemented: fail-closed typing, three phone steps instead of a timed delay, text on stdin, single-use steps, port open only during sign-in, a `Host` check on the main server, and accessibility fixes. The phone form is now encrypted with a confirmation code (`encryption-plan.md`, implemented). The QR code is shown only in the CouchTube UI, which asks to open Firefox separately. The user tried the phone flow and reported it "kind of worked"; the details weren't given.
-- yt-dlp and mpv use the active profile's login.
-- **Done when:** two accounts can be signed in and switched with `p`.
-
-### Phase 5 — Account feeds — implemented, real-account verification pending
-- SQLite adds per-profile video metadata, progress, queue and expiring response caches without replacing existing profiles.
-- Guest has local history/resume/queue; account feeds require a cookie database. Feed sources use canonical YouTube URLs, including History, WL and LL.
-- The backend observes mpv properties and end-file events over one persistent IPC connection. It saves progress every ~5 s and on stop, advances the queue at EOF, and treats mpv `n` (`quit 5`) as an explicit next request. Esc/q leaves the remaining queue intact.
-- Watched sync runs once after ~30–35 s of accumulated actual viewing, using `--simulate --mark-watched --no-flat-playlist`. Pausing and seeking do not add skipped time; failures can retry in a later session. Guest never sends watched updates.
-- Server caches retain responses for 10 min for account feeds/channels, 2 min for history and 30 min for search; selecting an account prefetches Recommended/Subscriptions. `u` refreshes the current feed.
-- Automated checks cover cache/profile isolation, resume, stop versus EOF/next, watched-sync arguments, persistence, and keyboard feed/queue navigation. Personal feed contents and YouTube history sync still need a real-account test.
-- Home rows: Continue watching (local), Recommended, Subscriptions. Separate screens for History, Watch Later and Liked.
-- Mark videos watched after ~30 s. Resume positions and queue per profile.
-- Per-profile cache; prefetch when a profile is picked.
-- **Done when:** each person sees their own YouTube home, and what they watch appears in their YouTube history.
+### Phases 1–5 — done on the dev machine (details in the code and git history)
+- **1 — Backend skeleton ✅ 2026-10-20.** Axum on `127.0.0.1:7878`, `ytdlp.rs`, `/api/search`, serves `frontend/dist`. yt-dlp search takes about 1.2 s here.
+- **2 — TV interface ✅ 2026-10-20.** Vite + React + TS (dev proxy `/api` → `:7878`); Home, Search, Results, Channel; 2D keyboard navigation with a remembered focus per screen; 10-foot dark styling, light on the GPU. Tested in headless Chromium at 1080p; still to try in `firefox --kiosk`.
+- **3 — Playback ✅, user test positive.** `player.rs` runs one mpv at a time (`--fullscreen --hwdec=vaapi --ytdl-format=… --input-ipc-server=…`) and reads `time-pos`/`duration` over IPC; SponsorBlock mpv script; Enter plays, Esc returns to the same card. Explicit Firefox-kiosk focus check pending.
+- **4 — Profiles and sign-in ✅, user test positive.** SQLite profiles (folders `0700`, database `0600`), Guest never loads cookies, per-profile caches and recent searches, "Who's watching?" screen, per-account Firefox profile (`user.js`, uBlock Origin, SponsorBlock), sign-in window that closes itself once the login cookie appears, login check via one `:ytsubs` item, and phone pairing with encryption and a confirmation code (2026-10-21; see `encryption-plan.md`). yt-dlp and mpv use the active profile's login. Two-account check pending.
+- **5 — Account feeds ✅, real-account verification partly done.** Per-profile metadata, progress, queue and expiring caches in SQLite. Home rows: Continue watching (local), Recommended, Subscriptions; separate History, Watch Later, Liked and Queue screens. The backend follows mpv over one persistent IPC connection: it saves progress every ~5 s and on stop, advances the queue at EOF, and treats mpv `n` as "next". Watched sync runs once after ~30–35 s of actual viewing (`--simulate --mark-watched --no-flat-playlist`; pausing and seeking don't count). Caches: 10 min for account feeds/channels, 2 min for history, 30 min for search; `u` refreshes. History sync verified with a real account on 2026-10-25 (first watch, read back with `yt-dlp :ythis`); rewatch and feed contents still to test.
 
 ### Phase 6 — Deploy and appliance mode
 Written (`deploy/`, `POST /api/system/exit`, Home menu item); not yet run on the server. Auto-login and power settings stay manual and are in the README.
