@@ -72,7 +72,14 @@ pub async fn channel(id: &str, page: u32, firefox: Option<&Path>) -> Result<Chan
     })
 }
 
+/// Shorts are hidden everywhere. Flat lists do not mark them (search links them as normal watch
+/// URLs), so anything this short counts. Live streams and premieres have no length and stay.
+pub const SHORTS_MAX_SECS: f64 = 180.0;
+
 impl Video {
+    pub fn is_short(&self) -> bool {
+        self.duration.is_some_and(|seconds| seconds <= SHORTS_MAX_SECS)
+    }
     pub fn placeholder(id: &str) -> Self {
         Self {
             id: id.into(),
@@ -293,6 +300,7 @@ fn parse_playlist(json: &[u8]) -> Result<Playlist> {
     let playlist: RawPlaylist = serde_json::from_slice(json).context("unexpected yt-dlp output")?;
 
     // Channel pages only name the channel once, at the top level.
+    // Shorts are dropped here, so no list shows them; a page can then hold fewer than `PAGE_SIZE`.
     let videos = playlist
         .entries
         .into_iter()
@@ -322,6 +330,7 @@ fn parse_playlist(json: &[u8]) -> Result<Playlist> {
                 reason: None,
             })
         })
+        .filter(|video| !video.is_short())
         .collect();
 
     Ok(Playlist {
@@ -333,6 +342,18 @@ fn parse_playlist(json: &[u8]) -> Result<Playlist> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shorts_are_dropped_from_every_list() {
+        let json = br#"{"entries": [
+            {"id": "aaaaaaaaaaa", "duration": 59},
+            {"id": "bbbbbbbbbbb", "duration": 180},
+            {"id": "ccccccccccc", "duration": null},
+            {"id": "ddddddddddd", "duration": 181}
+        ]}"#;
+        let ids: Vec<String> = parse_playlist(json).unwrap().videos.into_iter().map(|v| v.id).collect();
+        assert_eq!(ids, ["ccccccccccc", "ddddddddddd"]);
+    }
 
     #[test]
     fn video_id_validation() {
@@ -409,7 +430,7 @@ mod tests {
         let json = br#"{
             "channel": "Blender",
             "channel_id": "UCSMOQeBJ2RAnuFungnQOxLg",
-            "entries": [{"id": "sO_lhW8av3U", "title": "Recap", "duration": 149}]
+            "entries": [{"id": "sO_lhW8av3U", "title": "Recap", "duration": 649}]
         }"#;
 
         let playlist = parse_playlist(json).unwrap();
@@ -419,6 +440,6 @@ mod tests {
             playlist.videos[0].channel_id.as_deref(),
             Some("UCSMOQeBJ2RAnuFungnQOxLg")
         );
-        assert_eq!(playlist.videos[0].duration, Some(149.0));
+        assert_eq!(playlist.videos[0].duration, Some(649.0));
     }
 }

@@ -764,7 +764,7 @@ function useScreenRows(screen: Screen, revision: number, refreshRequested: RefOb
       loadPage(screen, 0, refresh).then((videos) => {
         finish()
         done({ rows: gridRows(videos, pageTitle(screen)), videos, page: 0, error: null,
-          done: videos.length < api.PAGE_SIZE })
+          done: videos.length === 0 })
       }, fail)
     } else {
       const pending = loadRows(screen, refresh)
@@ -792,10 +792,11 @@ function useScreenRows(screen: Screen, revision: number, refreshRequested: RefOb
       .then((fetched) => {
         const seen = new Set(known.map((v) => v.id))
         const added = fetched.filter((v) => !seen.has(v.id))
-        // Recommended can repeat itself; an empty or short page means there is no more.
+        // Recommended can repeat itself; an empty page, or one with nothing new, means there is no more.
+        // A short page is not the end: Shorts are left out of every page.
         const videos = [...known, ...added]
         setState((s) => s && s.key === key ? { ...s, videos, rows: gridRows(videos, pageTitle(screenRef.current)), page,
-          done: fetched.length < api.PAGE_SIZE || added.length === 0 || page + 1 >= api.MAX_PAGES } : s)
+          done: added.length === 0 || page + 1 >= api.MAX_PAGES } : s)
       })
       .catch(() => setState((s) => s && s.key === key ? { ...s, done: true } : s))
       .finally(() => { moreBusy.current = false; setLoadingMore(false) })

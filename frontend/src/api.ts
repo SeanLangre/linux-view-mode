@@ -49,7 +49,7 @@ function get<T>(path: string, refresh = false): Promise<T> {
 export const search = (query: string, refresh = false) =>
   get<Video[]>(`/api/search?q=${encodeURIComponent(query)}`, refresh)
 
-/** Videos per page; a shorter page is the last one. Matches the backend. */
+/** Videos per page. Matches the backend, which drops Shorts, so a page can be shorter; only an empty page is the last one. */
 export const PAGE_SIZE = 24
 /** The backend serves pages 0 to 9. */
 export const MAX_PAGES = 10

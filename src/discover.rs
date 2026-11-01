@@ -29,14 +29,14 @@ const MAX_PENALTY: f64 = 1.5;
 /// Longer videos are preferred: no boost under 5 minutes, growing to `LONG_BOOST` at 40 minutes.
 const LONG_BOOST: f64 = 0.3;
 /// Videos watched more per day since upload are preferred, on a log scale: full boost at
-/// `POPULAR_PER_DAY` views a day, half at its square root.
+/// `POPULAR_PER_DAY` views a day, half at its square root. Views are spread over at least
+/// `POPULAR_MIN_DAYS`, so a first-day burst (often bought or pushed) does not count as popular.
 const POPULAR_BOOST: f64 = 0.3;
 const POPULAR_PER_DAY: f64 = 10_000.0;
+const POPULAR_MIN_DAYS: f64 = 30.0;
 /// Each further video from the same channel keeps this share of its score, so one channel
 /// cannot fill the top of the list.
 const SAME_CHANNEL_DECAY: f64 = 0.7;
-/// Shorts are never suggested. Search results do not mark them, so anything this short counts.
-const SHORTS_MAX_SECS: f64 = 180.0;
 /// Share of the list kept for videos from channels that are not seed channels, so the list
 /// is not only the seeded channels' own uploads.
 const NEW_CHANNEL_SHARE: f64 = 0.5;
@@ -66,15 +66,20 @@ pub fn pick_sources(seeds: &[Seed], rotation: usize) -> (Vec<&Seed>, Vec<&Seed>,
     (pick("theme", MAX_THEMES), pick("channel", MAX_CHANNELS), pick("video", MAX_VIDEOS))
 }
 
-/// Pairs of themes to search together: `(label, query)`. Pairs come from the newest `BLEND_FROM`
-/// themes; `rotation` (for example the hour) moves which `MAX_BLENDS` of them are used, so
-/// different pairs get their turn over time.
-pub fn blends(themes: &[&Seed], rotation: usize) -> Vec<(String, String)> {
+/// Pairs of themes to search together: `(label, query, themes)`. Pairs come from the newest
+/// `BLEND_FROM` themes; `rotation` (for example the hour) moves which `MAX_BLENDS` of them are
+/// used, so different pairs get their turn over time. `themes` are the pair's two theme values,
+/// which every result must mention (see `Source::needs`).
+pub fn blends(themes: &[&Seed], rotation: usize) -> Vec<(String, String, Vec<String>)> {
     let themes = &themes[..themes.len().min(BLEND_FROM)];
     let mut pairs = Vec::new();
     for (i, first) in themes.iter().enumerate() {
         for second in &themes[i + 1..] {
-            pairs.push((format!("{} & {}", first.label, second.label), format!("{} {}", first.value, second.value)));
+            pairs.push((
+                format!("{} & {}", first.label, second.label),
+                format!("{} {}", first.value, second.value),
+                vec![first.value.clone(), second.value.clone()],
+            ));
         }
     }
     if pairs.len() <= MAX_BLENDS {
@@ -88,6 +93,10 @@ pub fn blends(themes: &[&Seed], rotation: usize) -> Vec<(String, String)> {
 pub struct Source {
     pub label: String,
     pub videos: Vec<Video>,
+    /// Topics every video from this source must mention in its title or channel name (one word
+    /// of each is enough). A search for two themes together returns loose matches that fit
+    /// neither, such as horror movies for "documentary spooky"; those are left out.
+    pub needs: Vec<String>,
 }
 
 /// Merges the result lists of several sources into one ranked list.
@@ -95,7 +104,7 @@ pub struct Source {
 /// A video's relevance grows the higher it sits in a source and the more sources list it. That is
 /// multiplied by boosts for recent, long and much-watched videos; videos from channels the user
 /// dismissed things from lose points, and each further video of one channel keeps less of its
-/// score. Videos in `known`, Shorts and excluded videos are dropped. Each video's `reason` names
+/// score. Videos in `known` and excluded videos are dropped. Each video's `reason` names
 /// the sources that found it. Half of the list is then reserved for the best videos from channels
 /// outside `seed_channels` (the channels the user already follows as seeds).
 pub fn rank(
@@ -111,7 +120,8 @@ pub fn rank(
     let mut order = 0;
     for source in sources {
         for (position, video) in source.videos.into_iter().enumerate() {
-            if known.contains(&video.id) || is_short(&video) || is_excluded(&video, excluded) {
+            // Shorts never get this far: `ytdlp` drops them from every list.
+            if known.contains(&video.id) || is_excluded(&video, excluded) || !mentions_all(&video, &source.needs) {
                 continue;
             }
             let points = 1.0 / (1.0 + position as f64 * 0.15);
@@ -212,6 +222,37 @@ fn is_excluded(video: &Video, excluded: &[String]) -> bool {
     })
 }
 
+/// Short words that say nothing about a topic ("the history of", "long documentary").
+const FILLER: &[&str] = &["the", "and", "for", "with", "about", "from", "how", "why", "what", "long", "short", "interesting", "best", "good", "video", "videos"];
+
+/// Whether the title or channel name mentions each topic in `needs`: at least one of the topic's
+/// words of 3+ letters other than `FILLER`. Words of 5+ letters also match other endings
+/// ("documentary" matches "documentaries", "spooky" matches "spookiest"). A topic with no such
+/// words is always mentioned.
+fn mentions_all(video: &Video, needs: &[String]) -> bool {
+    if needs.is_empty() {
+        return true;
+    }
+    let mut words = stems(&video.title);
+    words.extend(stems(video.channel.as_deref().unwrap_or("")));
+    needs.iter().all(|topic| {
+        let keys: Vec<String> = stems(topic)
+            .into_iter()
+            .filter(|w| w.chars().count() >= 3 && !FILLER.contains(&w.as_str()))
+            .collect();
+        keys.is_empty()
+            || keys.iter().any(|key| {
+                let len = key.chars().count();
+                if len >= 5 {
+                    let prefix: String = key.chars().take(len - 1).collect();
+                    words.iter().any(|w| w.starts_with(&prefix))
+                } else {
+                    words.contains(key)
+                }
+            })
+    })
+}
+
 /// Interleaves two ranked lists so `new` takes `share` of the slots, spread evenly; when one
 /// list runs out the other fills the rest.
 fn mix(seeded: Vec<Video>, new: Vec<Video>, share: f64) -> Vec<Video> {
@@ -224,11 +265,6 @@ fn mix(seeded: Vec<Video>, new: Vec<Video>, share: f64) -> Vec<Video> {
         out.extend(next);
     }
     out
-}
-
-/// Shorts, recognised by length (live streams and premieres have none and pass).
-fn is_short(video: &Video) -> bool {
-    video.duration.is_some_and(|seconds| seconds <= SHORTS_MAX_SECS)
 }
 
 /// 1 up to a year old, 0.5 at two years, 0 from three; 0 when the date is unknown.
@@ -246,10 +282,11 @@ fn length(duration: Option<f64>) -> f64 {
 }
 
 /// Views per day since upload on a log scale: 1 at `POPULAR_PER_DAY` or more, 0.5 at its square
-/// root (100 a day), 0 when the count is unknown. An unknown date counts as a year old.
+/// root (100 a day), 0 when the count is unknown. An unknown date counts as a year old, and a
+/// younger video than `POPULAR_MIN_DAYS` as that old.
 fn popularity(views: Option<u64>, timestamp: Option<i64>, now: i64) -> f64 {
     let Some(views) = views else { return 0.0 };
-    let days = timestamp.map_or(YEAR_DAYS, |t| ((now - t) as f64 / 86_400.0).max(1.0));
+    let days = timestamp.map_or(YEAR_DAYS, |t| ((now - t) as f64 / 86_400.0).max(POPULAR_MIN_DAYS));
     ((views as f64 / days + 1.0).log10() / POPULAR_PER_DAY.log10()).clamp(0.0, 1.0)
 }
 
@@ -279,7 +316,7 @@ mod tests {
         video
     }
     fn source(label: &str, videos: Vec<Video>) -> Source {
-        Source { label: label.into(), videos }
+        Source { label: label.into(), videos, needs: vec![] }
     }
     fn ids(videos: &[Video]) -> Vec<&str> {
         videos.iter().map(|v| v.id.as_str()).collect()
@@ -428,12 +465,12 @@ mod tests {
         let themes: Vec<&Seed> = seeds.iter().collect();
         assert!(blends(&themes[..1], 0).is_empty());
         let two = blends(&themes[..2], 5);
-        assert_eq!(two, [("T1 & T2".to_string(), "t1 t2".to_string())]);
+        assert_eq!(two, [("T1 & T2".to_string(), "t1 t2".to_string(), vec!["t1".to_string(), "t2".to_string()])]);
         // Six themes: only the first four make six pairs, and three of them are used.
         let first = blends(&themes, 0);
         assert_eq!(first.len(), MAX_BLENDS);
         assert_eq!(first[0].0, "T1 & T2");
-        assert!(first.iter().all(|(label, _)| !label.contains("T5") && !label.contains("T6")));
+        assert!(first.iter().all(|(label, _, _)| !label.contains("T5") && !label.contains("T6")));
         assert_ne!(blends(&themes, 1), first);
         assert_eq!(blends(&themes, 6), first);
     }
@@ -496,22 +533,6 @@ mod tests {
     }
 
     #[test]
-    fn shorts_are_never_suggested() {
-        let mut short = video("aaaaaaaaaaa", None);
-        short.duration = Some(59.0);
-        let mut vertical = video("bbbbbbbbbbb", None);
-        vertical.duration = Some(180.0);
-        let mut live = video("ccccccccccc", None);
-        live.duration = None;
-        let mut normal = video("ddddddddddd", None);
-        normal.duration = Some(181.0);
-        let ranked = rank_plain(vec![source("s", vec![short, vertical, live, normal])], &HashSet::new());
-        let mut kept = ids(&ranked);
-        kept.sort();
-        assert_eq!(kept, ["ccccccccccc", "ddddddddddd"]);
-    }
-
-    #[test]
     fn boosts_reorder_close_matches_but_do_not_lift_a_weak_one_over_the_top_result() {
         let mut top = video("aaaaaaaaaaa", Some(NOW - 4 * 365 * 86_400));
         top.duration = Some(480.0);
@@ -544,12 +565,44 @@ mod tests {
     }
 
     #[test]
+    fn a_search_for_two_themes_keeps_only_videos_that_mention_both() {
+        let titled = |id: &str, title: &str, channel: &str| {
+            let mut v = video(id, None);
+            v.title = title.into();
+            v.channel = Some(channel.into());
+            v
+        };
+        let found = vec![
+            titled("aaaaaaaaaaa", "Zombies Become More Dangerous After Dark | SICK", "Disaster Zone Movies"),
+            titled("bbbbbbbbbbb", "A Spooky Halloween Horror Short Film Collection", "Sozo Bear Films"),
+            titled("ccccccccccc", "The Spookiest Places on Earth (Documentary)", "Some Channel"),
+            titled("ddddddddddd", "Haunted Britain: full documentaries", "Sir Spooks"),
+        ];
+        let blend = Source {
+            label: "interesting long documentary & spooky".into(),
+            videos: found,
+            needs: vec!["interesting long documentary".into(), "spooky".into()],
+        };
+        let mut kept = ids(&rank_plain(vec![blend], &HashSet::new())).iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        kept.sort();
+        assert_eq!(kept, ["ccccccccccc", "ddddddddddd"]);
+        // A topic made only of filler words cannot be checked, so it does not filter.
+        let v = titled("eeeeeeeeeee", "Anything", "Anyone");
+        assert!(mentions_all(&v, &["the best".into()]));
+        assert!(!mentions_all(&v, &["documentary".into()]));
+    }
+
+    #[test]
     fn popularity_counts_views_per_day_on_a_log_scale() {
         let day = 86_400;
         assert_eq!(popularity(None, Some(NOW - day), NOW), 0.0);
         assert_eq!(popularity(Some(1_000_000), Some(NOW - day), NOW), 1.0);
         // 3,000 views in 30 days is 100 a day: half way.
         assert!((popularity(Some(3_000), Some(NOW - 30 * day), NOW) - 0.5).abs() < 0.01);
+        // 15,000 views in five hours is not 15,000 a day: it counts as spread over 30 days.
+        let burst = popularity(Some(15_000), Some(NOW - 5 * 3_600), NOW);
+        assert!((burst - popularity(Some(15_000), Some(NOW - 30 * day), NOW)).abs() < 1e-9);
+        assert!(burst < 0.7);
         // A young niche video is not far behind an old popular one.
         let young = popularity(Some(15_000), Some(NOW - 60 * day), NOW);
         let old = popularity(Some(400_000), Some(NOW - 5 * 365 * day), NOW);

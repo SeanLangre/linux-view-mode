@@ -145,15 +145,15 @@ impl Feeds {
         let mut sources = Vec::new();
         let mut failed = 0;
         let mut seed_videos = HashSet::new();
-        for (label, query) in discover::blends(&themes, hour) {
+        for (label, query, needs) in discover::blends(&themes, hour) {
             match self.search(guest, &query, discover::BLEND_LIMIT, refresh).await {
-                Ok(videos) => sources.push(discover::Source { label, videos }),
+                Ok(videos) => sources.push(discover::Source { label, videos, needs }),
                 Err(err) => { failed += 1; tracing::warn!("For You blended search failed: {err:#}"); }
             }
         }
         for seed in themes {
             match self.search(guest, &seed.value, discover::THEME_LIMIT, refresh).await {
-                Ok(videos) => sources.push(discover::Source { label: seed.label.clone(), videos }),
+                Ok(videos) => sources.push(discover::Source { label: seed.label.clone(), videos, needs: vec![] }),
                 Err(err) => { failed += 1; tracing::warn!("For You theme search failed: {err:#}"); }
             }
         }
@@ -163,6 +163,7 @@ impl Feeds {
                 Ok(channel) => sources.push(discover::Source {
                     label: seed.label.clone(),
                     videos: channel.videos.into_iter().take(discover::CHANNEL_LIMIT).collect(),
+                    needs: vec![],
                 }),
                 Err(err) => { failed += 1; tracing::warn!("For You channel failed: {err:#}"); }
             }
@@ -186,7 +187,7 @@ impl Feeds {
                 }
             };
             match self.search(guest, &discover::query_from_title(&title), discover::THEME_LIMIT, refresh).await {
-                Ok(found) => sources.push(discover::Source { label: format!("like {title}"), videos: found }),
+                Ok(found) => sources.push(discover::Source { label: format!("like {title}"), videos: found, needs: vec![] }),
                 Err(err) => { failed += 1; tracing::warn!("For You similar search failed: {err:#}"); }
             }
         }

@@ -45,7 +45,10 @@ Discovery runs as **Guest** (no account cookies), decided 2026-11-01, so searche
   - Boosts multiply relevance instead of adding to it: `relevance × (1 + 0.4·recency + 0.3·length + 0.3·popularity)`. Recency and length keep their curves (0–1); popularity is views per day since upload on a log scale (1 at 10,000/day, 0.5 at 100/day). Before, +1.4 of boosts outweighed a first place (1.0), so recent long videos beat better matches.
   - The minimum for non-seed channels drops from 100,000 to 2,000 views (spam guard only).
   - Each further video of one channel keeps 70% of the previous one's share (0.7, 0.49…), so one channel cannot fill the top.
-  - Shorts are dropped: anything 3 minutes or shorter (search results link Shorts as normal watch URLs, so length is the only sign). Live streams have no length and stay.
+  - Shorts are dropped everywhere, not only in For You (`ytdlp::parse_playlist`, so search, channels and feeds too): anything 3 minutes or shorter (search results link Shorts as normal watch URLs, so length is the only sign). Live streams have no length and stay. Since pages can now be shorter than 24, the frontend treats only an empty page (or one with nothing new) as the end of a list.
   - Seeds rotate: with more seeds of a kind than its maximum, the newest half of the slots go to the newest seeds and the rest rotate through the older ones by the hour, so no seed is ignored for good.
   - Exclusion related words narrowed: `music` no longer hides "mix", "audio" or "playlist"; `kids` no longer hides "cartoon".
+- [x] 3i. First real use (2026-11-01) showed cheap horror "FULL MOVIE" uploads, hours old with ~10–50k views, all from the blend "interesting long documentary & spooky":
+  - A blend's results must mention both themes in the title or channel name (`Source::needs`, `mentions_all`): one word of 3+ letters per theme, ignoring filler words like "interesting" and "long"; words of 5+ letters also match other endings ("documentaries", "spookiest"). On that list it dropped all 10 blend results.
+  - Views per day are spread over at least 30 days (`POPULAR_MIN_DAYS`), so 15k views in five hours no longer counts as 15k a day.
 - [x] 4. Recorded in `plan.md` and `TODO.md`.
