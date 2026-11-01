@@ -47,6 +47,10 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| "config/mpv".into());
     let player = player::Player::new(player_config)?;
+    // Videos play in Firefox unless COUCHTUBE_PLAYER=mpv; mpv remains the fallback either way.
+    if std::env::var("COUCHTUBE_PLAYER").as_deref() != Ok("mpv") {
+        player.use_firefox(port).await;
+    }
     let data_dir = match std::env::var_os("COUCHTUBE_DATA_DIR") {
         Some(path) => PathBuf::from(path),
         None => std::env::var_os("XDG_DATA_HOME")

@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CouchTube player</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; color: #fff; font-family: system-ui, sans-serif; }
+  /* The page, not the embedded player, keeps keyboard focus so the same keys work as in mpv. */
+  #frame { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; pointer-events: none; }
+  #osd { position: fixed; left: 2rem; top: 2rem; max-width: 70vw; padding: 0.6rem 1rem; border-radius: 0.5rem;
+    background: rgb(0 0 0 / 0.8); font-size: 2rem; white-space: pre-line; opacity: 0; transition: opacity 0.2s; }
+  #osd.on { opacity: 1; }
+</style>
+</head>
+<body tabindex="0">
+<div id="player"></div>
+<div id="osd"></div>
+<script>
+// Plays one video in YouTube's embedded player and mirrors what mpv offered: the backend gets
+// position, duration and pause state, and sends back the same commands the phone remote and
+// keyboard use. Skipping paid sponsor segments is done here too.
+const params = new URLSearchParams(location.search)
+const videoId = params.get('v') || ''
+const session = Number(params.get('s'))
+const start = Number(params.get('start')) || 0
+const language = /^[a-z]{2,3}(-[A-Za-z0-9]+)?$/.test(params.get('sub') || '') ? params.get('sub') : ''
+
+let player = null
+let ready = false
+let finished = false
+let captions = Boolean(language)
+let segments = []
+let osdTimer = 0
+let failures = 0
+
+function show(text, ms = 2500) {
+  const osd = document.getElementById('osd')
+  osd.textContent = text
+  osd.classList.add('on')
+  clearTimeout(osdTimer)
+  osdTimer = setTimeout(() => osd.classList.remove('on'), ms)
+}
+
+function clock(seconds) {
+  seconds = Math.max(0, Math.floor(seconds || 0))
+  const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = seconds % 60
+  const pad = (n) => String(n).padStart(2, '0')
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`
+}
+
+function snapshot() {
+  if (!ready) return {}
+  const data = player.getVideoData ? player.getVideoData() : {}
+  return {
+    position: player.getCurrentTime(),
+    duration: player.getDuration(),
+    paused: player.getPlayerState() !== 1 && player.getPlayerState() !== 3,
+    title: data && data.title ? data.title : undefined,
+    volume: player.getVolume(),
+  }
+}
+
+async function report(extra = {}) {
+  try {
+    const res = await fetch('/api/player/report', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session, ...snapshot(), ...extra }),
+    })
+    if (!res.ok) throw new Error(String(res.status))
+    failures = 0
+    const body = await res.json()
+    for (const command of body.commands || []) run(command)
+  } catch {
+    // The backend is gone or restarting; it closes this window itself.
+    failures += 1
+  }
+}
+
+function finish(outcome, extra = {}) {
+  if (finished) return
+  finished = true
+  void report({ outcome, ...extra })
+}
+
+// The commands are mpv's, as sent by the remote: ["cycle","pause"], ["seek",10], ["add","volume",2].
+function run(command) {
+  if (!ready || !Array.isArray(command)) return
+  const [name, a, b] = command
+  if (name === 'cycle' && a === 'pause') togglePause()
+  else if (name === 'cycle' && a === 'mute') {
+    if (player.isMuted()) { player.unMute(); show('Mute off') } else { player.mute(); show('Muted') }
+  } else if (name === 'cycle' && a === 'sub') toggleCaptions()
+  else if (name === 'seek' && typeof a === 'number') {
+    const target = Math.max(0, player.getCurrentTime() + a)
+    player.seekTo(target, true)
+    show(`${a > 0 ? '+' : ''}${a}s  ${clock(target)}`, 1200)
+  } else if (name === 'add' && a === 'volume' && typeof b === 'number') {
+    const volume = Math.min(100, Math.max(0, Math.round(player.getVolume() + b)))
+    player.setVolume(volume)
+    show(`Volume ${volume}`, 1200)
+  }
+}
+
+function togglePause() {
+  if (player.getPlayerState() === 1) { player.pauseVideo(); show('Paused', 1200) }
+  else { player.playVideo(); show('Playing', 1200) }
+}
+
+function toggleCaptions() {
+  captions = !captions
+  try {
+    if (captions) player.loadModule('captions'); else player.unloadModule('captions')
+    show(captions ? 'Subtitles on' : 'Subtitles off', 1200)
+  } catch { show('No subtitles') }
+}
+
+document.addEventListener('keydown', (event) => {
+  if (event.ctrlKey || event.altKey || event.metaKey) return
+  const key = event.key
+  const handled = ['Escape', 'q', ' ', 'MediaPlayPause', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+    '9', '0', 'm', 'i', 'n', 'c'].includes(key)
+  if (!handled) return
+  event.preventDefault()
+  if (key === 'Escape' || key === 'q') finish('quit')
+  else if (key === 'n') finish('next')
+  else if (key === ' ' || key === 'MediaPlayPause') ready && togglePause()
+  else if (key === 'ArrowLeft') run(['seek', -10])
+  else if (key === 'ArrowRight') run(['seek', 10])
+  else if (key === 'ArrowUp') run(['seek', 60])
+  else if (key === 'ArrowDown') run(['seek', -60])
+  else if (key === '9') run(['add', 'volume', -2])
+  else if (key === '0') run(['add', 'volume', 2])
+  else if (key === 'm') run(['cycle', 'mute'])
+  else if (key === 'c') run(['cycle', 'sub'])
+  else if (key === 'i' && ready) {
+    const s = snapshot()
+    show(`${s.title || ''}\n${clock(s.position)} / ${clock(s.duration)}`, 4000)
+  }
+})
+
+// Skip only paid sponsor segments; a failure leaves playback untouched.
+async function loadSegments() {
+  try {
+    const url = 'https://sponsor.ajay.app/api/skipSegments?' + new URLSearchParams({
+      videoID: videoId, categories: '["sponsor"]', actionTypes: '["skip"]' })
+    const res = await fetch(url)
+    if (!res.ok) return
+    const data = await res.json()
+    segments = (Array.isArray(data) ? data : [])
+      .filter((item) => item.category === 'sponsor' && item.actionType === 'skip' && Array.isArray(item.segment)
+        && Number.isFinite(item.segment[0]) && Number.isFinite(item.segment[1]) && item.segment[0] >= 0 && item.segment[1] > item.segment[0])
+      .map((item) => item.segment)
+  } catch { /* no segments */ }
+}
+
+function skipSponsors() {
+  if (!ready || player.getPlayerState() !== 1) return
+  const position = player.getCurrentTime()
+  const span = segments.find(([from, to]) => position >= from && position < to)
+  if (span) { player.seekTo(span[1], true); show('Skipped sponsor', 2000) }
+}
+
+window.onYouTubeIframeAPIReady = () => {
+  player = new YT.Player('player', {
+    videoId,
+    width: '100%',
+    height: '100%',
+    playerVars: {
+      autoplay: 1, controls: 0, disablekb: 1, fs: 0, rel: 0, iv_load_policy: 3, playsinline: 1,
+      start: Math.floor(start), origin: location.origin,
+      ...(language ? { cc_load_policy: 1, cc_lang_pref: language, hl: language } : {}),
+    },
+    events: {
+      onReady: () => {
+        ready = true
+        player.playVideo()
+        const frame = document.querySelector('iframe')
+        if (frame) frame.id = 'frame'
+      },
+      onStateChange: (event) => { if (event.data === 0) finish('eof') },
+      onError: (event) => finish('error', { code: event.data }),
+    },
+  })
+}
+
+void loadSegments()
+setInterval(() => { if (!finished) void report() }, 500)
+setInterval(skipSponsors, 250)
+setInterval(() => window.focus(), 2000)
+const script = document.createElement('script')
+script.src = 'https://www.youtube.com/iframe_api'
+script.onerror = () => finish('error', { code: -1 })
+document.head.appendChild(script)
+</script>
+</body>
+</html>

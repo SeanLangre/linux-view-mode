@@ -55,6 +55,7 @@ pub fn router(state: AppState) -> Router {
         .route("/play", post(play))
         .route("/stop", post(stop))
         .route("/status", get(status))
+        .route("/player/report", post(player_report))
         .route("/feed/{kind}", get(feed))
         .route("/check", get(check))
         .route("/queue", get(queue).post(enqueue).delete(clear_queue))
@@ -224,10 +225,20 @@ async fn play(
             tracing::error!("could not start playback: {err:#}");
             ApiError::new(
                 StatusCode::BAD_GATEWAY,
-                "could not start mpv, check the server log",
+                "could not start the player, check the server log",
             )
         })?;
     Ok(Json(json!({"status": "starting"})))
+}
+
+/// Progress from the Firefox player page; the answer carries commands for it to run.
+async fn player_report(
+    State(state): State<AppState>,
+    body: Result<Json<crate::player::WebReport>, JsonRejection>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let Json(report) = body.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid player report"))?;
+    let commands = state.playback.player.web_report(report).await;
+    Ok(Json(json!({ "commands": commands })))
 }
 
 async fn stop(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
