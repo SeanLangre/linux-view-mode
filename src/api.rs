@@ -61,6 +61,7 @@ pub fn router(state: AppState) -> Router {
         .route("/queue", get(queue).post(enqueue).delete(clear_queue))
         .route("/queue/{id}", axum::routing::delete(remove_queue))
         .route("/foryou/dismiss", post(dismiss))
+        .route("/watched", post(set_watched))
         .route("/seeds", get(seeds).post(add_seed))
         .route("/seeds/{id}", axum::routing::delete(remove_seed))
         .route("/next", post(next))
@@ -696,6 +697,27 @@ async fn remove_queue(
         .await
         .map_err(internal)?;
     Ok(Json(json!({"status":"removed"})))
+}
+#[derive(Deserialize)]
+struct WatchedBody {
+    id: String,
+    watched: bool,
+}
+/// Marks a video watched (or unwatched) for the active profile.
+async fn set_watched(
+    State(state): State<AppState>,
+    body: Result<Json<WatchedBody>, JsonRejection>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let Json(item) =
+        body.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "expected {id, watched} JSON"))?;
+    if !ytdlp::is_video_id(&item.id) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid video id"));
+    }
+    let account = state.profiles.active().await.map_err(internal)?;
+    let db = &state.profiles.db;
+    db.set_watched(&account.profile.id, &item.id, item.watched).await.map_err(internal)?;
+    db.cache_delete(&account.profile.id, crate::feeds::Feeds::FORYOU_KEY).await.map_err(internal)?;
+    Ok(Json(json!({"watched": item.watched})))
 }
 async fn dismiss(
     State(state): State<AppState>,

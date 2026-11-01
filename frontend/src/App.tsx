@@ -302,6 +302,18 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
     } catch (err) { notify((err as Error).message) }
   }
 
+  /** Marks the focused video watched, or clears the mark if it already is. */
+  async function toggleWatched() {
+    const video = focusedVideo()
+    if (!video) return
+    const watched = !video.completed
+    try {
+      await api.setWatched(video.id, watched)
+      setDataRevision((value) => value + 1)
+      notify(watched ? 'Marked as watched' : 'Marked as not watched')
+    } catch (err) { notify((err as Error).message) }
+  }
+
   /** Adds the focused video's channel to the seeds, so For You finds more from it. */
   async function seedFocusedChannel() {
     const video = focusedVideo()
@@ -383,7 +395,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
         else if (e.key === 'Escape' || e.key === 'Backspace') {
           e.preventDefault()
           if (!starting) void stopVideo()
-        } else if (ARROWS[e.key] || ['Enter', '/', 'Home', 'c', 's', 'x'].includes(e.key)) {
+        } else if (ARROWS[e.key] || ['Enter', '/', 'Home', 'c', 's', 'x', 'w'].includes(e.key)) {
           e.preventDefault()
         }
         return
@@ -444,6 +456,9 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
           break
         case 'x':
           void dismissFocusedVideo()
+          break
+        case 'w':
+          void toggleWatched()
           break
         case 's':
           void seedFocusedChannel()
@@ -551,12 +566,13 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
         {videoRowFocused && <span><kbd>A</kbd>Queue</span>}
         {videoRowFocused && <span><kbd>C</kbd>Channel</span>}
         {videoRowFocused && <span><kbd>S</kbd>Seed channel</span>}
+        {videoRowFocused && <span><kbd>W</kbd>Watched</span>}
         {videoRowFocused && screen.kind === 'foryou' && <span><kbd>X</kbd>Not interested</span>}
         {(screen.kind === 'queue' || (screen.kind === 'foryou' && focusedRow?.kind === 'chips')) && <span><kbd>D</kbd>Remove</span>}
         <span><kbd>N</kbd>Next</span>
         <span><kbd>U</kbd>Refresh</span>
-        <span><kbd>/</kbd>Search</span>
-        <span><kbd>P</kbd>Profiles</span>
+        {screen.kind !== 'foryou' && <span><kbd>/</kbd>Search</span>}
+        {screen.kind !== 'foryou' && <span><kbd>P</kbd>Profiles</span>}
         {stack.length > 1 && <span><kbd>Esc</kbd>Back</span>}
       </footer>
 

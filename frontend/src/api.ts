@@ -142,6 +142,7 @@ export async function removeSeed(id: number) {
   if (!res.ok) throw new Error(body?.error ?? `request failed (${res.status})`)
   return body as Seed[]
 }
+export const setWatched = (id: string, watched: boolean) => playback<{ watched: boolean }>('watched', { id, watched })
 export const dismiss = (id: string) => playback<{ status: string }>('foryou/dismiss', { id })
 export const queue = () => playback<Video[]>('queue')
 export const enqueue = (id: string) => playback<Video[]>('queue', { id })

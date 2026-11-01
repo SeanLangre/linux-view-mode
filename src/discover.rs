@@ -13,6 +13,11 @@ pub const MAX_VIDEOS: usize = 4;
 /// Videos taken from each search and each channel.
 pub const THEME_LIMIT: u32 = 12;
 pub const CHANNEL_LIMIT: usize = 8;
+/// Blended searches combine two themes ("retro computing sourdough") to find videos that fit both.
+/// Only pairs among the newest themes are used, and only a few per refresh.
+pub const BLEND_FROM: usize = 4;
+pub const MAX_BLENDS: usize = 3;
+pub const BLEND_LIMIT: u32 = 10;
 /// Recent videos are preferred: full boost up to a year old, half at two years, none from three.
 const RECENT_BOOST: f64 = 0.8;
 const YEAR_DAYS: f64 = 365.0;
@@ -33,6 +38,24 @@ pub fn pick_sources(seeds: &[Seed]) -> (Vec<&Seed>, Vec<&Seed>, Vec<&Seed>) {
         seeds.iter().rev().filter(|s| s.kind == kind).take(max).collect()
     };
     (newest("theme", MAX_THEMES), newest("channel", MAX_CHANNELS), newest("video", MAX_VIDEOS))
+}
+
+/// Pairs of themes to search together: `(label, query)`. Pairs come from the newest `BLEND_FROM`
+/// themes; `rotation` (for example the hour) moves which `MAX_BLENDS` of them are used, so
+/// different pairs get their turn over time.
+pub fn blends(themes: &[&Seed], rotation: usize) -> Vec<(String, String)> {
+    let themes = &themes[..themes.len().min(BLEND_FROM)];
+    let mut pairs = Vec::new();
+    for (i, first) in themes.iter().enumerate() {
+        for second in &themes[i + 1..] {
+            pairs.push((format!("{} & {}", first.label, second.label), format!("{} {}", first.value, second.value)));
+        }
+    }
+    if pairs.len() <= MAX_BLENDS {
+        return pairs;
+    }
+    let start = rotation % pairs.len();
+    (0..MAX_BLENDS).map(|n| pairs[(start + n) % pairs.len()].clone()).collect()
 }
 
 /// One list of results and the reason it was fetched, shown on the card ("retro computing").
@@ -264,6 +287,23 @@ mod tests {
         assert_eq!(rank_excluding(&["music"]), ["bbbbbbbbbbb", "ddddddddddd"]);
         assert_eq!(rank_excluding(&["video essay"]), ["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"]);
         assert_eq!(rank_excluding(&[]).len(), 4);
+    }
+
+    #[test]
+    fn blends_pair_the_newest_themes_and_rotate() {
+        let seed = |id: i64| Seed { id, kind: "theme".into(), value: format!("t{id}"), label: format!("T{id}") };
+        let seeds: Vec<Seed> = (1..=6).map(seed).collect();
+        let themes: Vec<&Seed> = seeds.iter().collect();
+        assert!(blends(&themes[..1], 0).is_empty());
+        let two = blends(&themes[..2], 5);
+        assert_eq!(two, [("T1 & T2".to_string(), "t1 t2".to_string())]);
+        // Six themes: only the first four make six pairs, and three of them are used.
+        let first = blends(&themes, 0);
+        assert_eq!(first.len(), MAX_BLENDS);
+        assert_eq!(first[0].0, "T1 & T2");
+        assert!(first.iter().all(|(label, _)| !label.contains("T5") && !label.contains("T6")));
+        assert_ne!(blends(&themes, 1), first);
+        assert_eq!(blends(&themes, 6), first);
     }
 
     #[test]

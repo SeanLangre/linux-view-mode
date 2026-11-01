@@ -142,6 +142,15 @@ impl Feeds {
         let mut sources = Vec::new();
         let mut failed = 0;
         let mut seed_videos = HashSet::new();
+        let hour = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| (d.as_secs() / 3600) as usize);
+        for (label, query) in discover::blends(&themes, hour) {
+            match self.search(guest, &query, discover::BLEND_LIMIT, refresh).await {
+                Ok(videos) => sources.push(discover::Source { label, videos }),
+                Err(err) => { failed += 1; tracing::warn!("For You blended search failed: {err:#}"); }
+            }
+        }
         for seed in themes {
             match self.search(guest, &seed.value, discover::THEME_LIMIT, refresh).await {
                 Ok(videos) => sources.push(discover::Source { label: seed.label.clone(), videos }),

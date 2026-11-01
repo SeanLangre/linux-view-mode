@@ -330,6 +330,23 @@ impl Database {
         .await
     }
 
+    /// Marks a video finished for this profile (kept in History, left out of Continue and For You),
+    /// or clears its progress so it counts as unwatched again. Nothing is sent to YouTube.
+    pub async fn set_watched(&self, profile: &str, id: &str, watched: bool) -> Result<()> {
+        if !watched {
+            let (profile, id) = (profile.to_owned(), id.to_owned());
+            return self
+                .with(move |db| {
+                    db.execute("DELETE FROM progress WHERE profile_id=?1 AND video_id=?2", params![profile, id])?;
+                    Ok(())
+                })
+                .await;
+        }
+        let video = self.video(profile, id).await?;
+        let duration = video.duration.filter(|d| *d > 0.0);
+        self.save_progress(profile, video, duration.unwrap_or(0.0), duration, 0.0, true).await
+    }
+
     pub async fn save_progress(
         &self,
         profile: &str,
@@ -545,6 +562,26 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn a_video_can_be_marked_watched_and_unmarked() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        let alice = db.create("Alice", "#aabbcc").await.unwrap();
+        let bob = db.create("Bob", "#aabbcc").await.unwrap();
+        let mut video = Video::placeholder("aqz-KE-bpKQ");
+        video.duration = Some(300.0);
+        db.cache_put(&alice.id, "feed:x", "[]".into(), 600, vec![video.clone()]).await.unwrap();
+        db.set_watched(&alice.id, &video.id, true).await.unwrap();
+        let history = db.progress_list(&alice.id, false).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert!(history[0].completed && history[0].resume_position.is_none());
+        assert!(db.progress_list(&alice.id, true).await.unwrap().is_empty());
+        assert!(db.watched_ids(&alice.id).await.unwrap().contains(&video.id));
+        assert!(db.progress_list(&bob.id, false).await.unwrap().is_empty());
+        db.set_watched(&alice.id, &video.id, false).await.unwrap();
+        assert!(db.progress_list(&alice.id, false).await.unwrap().is_empty());
+        assert!(!db.watched_ids(&alice.id).await.unwrap().contains(&video.id));
+    }
+
     #[tokio::test]
     async fn watch_data_queue_and_cache_are_scoped_and_cascade_on_profile_removal() {
         let db = Database::open(Path::new(":memory:")).unwrap();
