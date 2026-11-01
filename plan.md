@@ -12,7 +12,7 @@ How to run the code is in `README.md`; the working checklist is `TODO.md`.
 | 3 — Playback | Implemented; user test positive |
 | 4 — Profiles and sign-in | Implemented with phone pairing; user test positive |
 | 5 — Account feeds | Implemented; history sync verified for a first watch |
-| For You (own recommendations) | Implemented (seeds, exclusions, blended searches, 50/50 new channels, 100k-view minimum, History button, watched mark), see `special-for-you.md`; not tried on screen |
+| For You (own recommendations) | Implemented (seeds, exclusions, blended searches, 50/50 new channels, 2k-view minimum, no Shorts, History button, watched mark), see `special-for-you.md`; not tried on screen |
 | Playback in the CouchTube window | Implemented 2026-11-01 (timeline, subtitles, remote commands, mpv fallback); user test positive |
 | 6 — Deploy | Written (`deploy/`, exit to desktop) |
 | 7 — Polish | Not started |

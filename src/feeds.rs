@@ -138,13 +138,13 @@ impl Feeds {
             return Ok(serde_json::from_str(&json)?);
         }
         let seeds = self.0.seeds(profile_id).await?;
-        let (themes, channels, videos) = discover::pick_sources(&seeds);
-        let mut sources = Vec::new();
-        let mut failed = 0;
-        let mut seed_videos = HashSet::new();
         let hour = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| (d.as_secs() / 3600) as usize);
+        let (themes, channels, videos) = discover::pick_sources(&seeds, hour);
+        let mut sources = Vec::new();
+        let mut failed = 0;
+        let mut seed_videos = HashSet::new();
         for (label, query) in discover::blends(&themes, hour) {
             match self.search(guest, &query, discover::BLEND_LIMIT, refresh).await {
                 Ok(videos) => sources.push(discover::Source { label, videos }),

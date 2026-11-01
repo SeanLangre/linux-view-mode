@@ -17,7 +17,8 @@ Checklist for [`plan.md`](plan.md). Tick items as they're done; move finished se
 - [ ] **X** hides a video; "Because: …" shows on cards
 - [ ] Exclusions: `not music` / `not kids` add "Not:" chips; check that matching videos (including a channel like "kidstv123") disappear after **U**
 - [ ] Blended searches: with 2+ themes, "Because: A & B" appears on some cards
-- [ ] 50/50 mix and the 100,000-view minimum: about every second card is from a channel that is not a seed; seed-channel videos with few views still appear
+- [ ] 50/50 mix and the 2,000-view minimum: about every second card is from a channel that is not a seed, and niche themes' new channels now show up; seed-channel videos with few views still appear
+- [ ] No Shorts and no videos of 3 minutes or less in For You; one channel does not fill the top rows; older seeds show up over the hours
 - [ ] **W** marks a video watched (badge appears, it leaves For You) and clears it again; the **History** button opens CouchTube's own history
 - [ ] Tune scoring (weights in `src/discover.rs`) after a week of real use
 

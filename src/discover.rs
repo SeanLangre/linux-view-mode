@@ -18,31 +18,52 @@ pub const CHANNEL_LIMIT: usize = 8;
 pub const BLEND_FROM: usize = 4;
 pub const MAX_BLENDS: usize = 3;
 pub const BLEND_LIMIT: u32 = 10;
+/// The boosts multiply a video's relevance (`1 + boosts`), so they reorder close matches but
+/// never lift a weak match above a strong one.
 /// Recent videos are preferred: full boost up to a year old, half at two years, none from three.
-const RECENT_BOOST: f64 = 0.8;
+const RECENT_BOOST: f64 = 0.4;
 const YEAR_DAYS: f64 = 365.0;
 /// Each dismissed video of a channel lowers that channel's other videos by this much, up to the cap.
 const DISMISS_PENALTY: f64 = 0.5;
 const MAX_PENALTY: f64 = 1.5;
 /// Longer videos are preferred: no boost under 5 minutes, growing to `LONG_BOOST` at 40 minutes.
-const LONG_BOOST: f64 = 0.6;
+const LONG_BOOST: f64 = 0.3;
+/// Videos watched more per day since upload are preferred, on a log scale: full boost at
+/// `POPULAR_PER_DAY` views a day, half at its square root.
+const POPULAR_BOOST: f64 = 0.3;
+const POPULAR_PER_DAY: f64 = 10_000.0;
+/// Each further video from the same channel keeps this share of its score, so one channel
+/// cannot fill the top of the list.
+const SAME_CHANNEL_DECAY: f64 = 0.7;
+/// Shorts are never suggested. Search results do not mark them, so anything this short counts.
+const SHORTS_MAX_SECS: f64 = 180.0;
 /// Share of the list kept for videos from channels that are not seed channels, so the list
 /// is not only the seeded channels' own uploads.
 const NEW_CHANNEL_SHARE: f64 = 0.5;
 /// Most missing view counts looked up (one yt-dlp request each) per refresh.
 pub const MAX_VIEW_LOOKUPS: usize = 8;
-/// Videos from channels that are not seeds need at least this many views (a video whose view count
-/// is unknown, as for some live streams and premieres, does not pass). Seed channels are exempt.
-const MIN_NEW_CHANNEL_VIEWS: u64 = 100_000;
+/// Videos from channels that are not seeds need at least this many views, only to keep out spam;
+/// popularity otherwise counts through `POPULAR_BOOST`. A video whose view count is unknown, as for
+/// some live streams and premieres, does not pass. Seed channels are exempt.
+const MIN_NEW_CHANNEL_VIEWS: u64 = 2_000;
 const SHORT_SECS: f64 = 300.0;
 const LONG_SECS: f64 = 2400.0;
 
-/// The seeds to query, newest first within each kind: themes, channels, videos.
-pub fn pick_sources(seeds: &[Seed]) -> (Vec<&Seed>, Vec<&Seed>, Vec<&Seed>) {
-    let newest = |kind: &str, max: usize| -> Vec<&Seed> {
-        seeds.iter().rev().filter(|s| s.kind == kind).take(max).collect()
+/// The seeds to query per kind: themes, channels, videos. When a kind has more seeds than its
+/// maximum, the newest half of the slots always go to the newest seeds and the rest rotate
+/// through the older ones with `rotation` (for example the hour), so no seed is left out for good.
+pub fn pick_sources(seeds: &[Seed], rotation: usize) -> (Vec<&Seed>, Vec<&Seed>, Vec<&Seed>) {
+    let pick = |kind: &str, max: usize| -> Vec<&Seed> {
+        let all: Vec<&Seed> = seeds.iter().rev().filter(|s| s.kind == kind).collect();
+        if all.len() <= max {
+            return all;
+        }
+        let fixed = max / 2;
+        let older = &all[fixed..];
+        let start = rotation * (max - fixed) % older.len();
+        all[..fixed].iter().copied().chain((0..max - fixed).map(|n| older[(start + n) % older.len()])).collect()
     };
-    (newest("theme", MAX_THEMES), newest("channel", MAX_CHANNELS), newest("video", MAX_VIDEOS))
+    (pick("theme", MAX_THEMES), pick("channel", MAX_CHANNELS), pick("video", MAX_VIDEOS))
 }
 
 /// Pairs of themes to search together: `(label, query)`. Pairs come from the newest `BLEND_FROM`
@@ -71,11 +92,12 @@ pub struct Source {
 
 /// Merges the result lists of several sources into one ranked list.
 ///
-/// A video scores more the higher it sits in a source and the more sources list it; videos
-/// uploaded in the last year get 0.8 points extra, fading to half at two years and nothing at three, and videos from channels the
-/// user dismissed things from lose points. Videos in `known` are dropped. Each video's
-/// `reason` names the sources that found it. Half of the list is then reserved for the
-/// best videos from channels outside `seed_channels` (the channels the user already follows as seeds).
+/// A video's relevance grows the higher it sits in a source and the more sources list it. That is
+/// multiplied by boosts for recent, long and much-watched videos; videos from channels the user
+/// dismissed things from lose points, and each further video of one channel keeps less of its
+/// score. Videos in `known`, Shorts and excluded videos are dropped. Each video's `reason` names
+/// the sources that found it. Half of the list is then reserved for the best videos from channels
+/// outside `seed_channels` (the channels the user already follows as seeds).
 pub fn rank(
     sources: Vec<Source>,
     known: &HashSet<String>,
@@ -89,7 +111,7 @@ pub fn rank(
     let mut order = 0;
     for source in sources {
         for (position, video) in source.videos.into_iter().enumerate() {
-            if known.contains(&video.id) || is_excluded(&video, excluded) {
+            if known.contains(&video.id) || is_short(&video) || is_excluded(&video, excluded) {
                 continue;
             }
             let points = 1.0 / (1.0 + position as f64 * 0.15);
@@ -113,11 +135,25 @@ pub fn rank(
             let penalty = entry.video.channel_id.as_ref()
                 .and_then(|channel| dismissed_channels.get(channel))
                 .map_or(0.0, |count| (*count as f64 * DISMISS_PENALTY).min(MAX_PENALTY));
-            entry.score += recency(entry.video.timestamp, now) + length_boost(entry.video.duration) - penalty;
+            let video = &entry.video;
+            let boosts = RECENT_BOOST * recency(video.timestamp, now)
+                + LONG_BOOST * length(video.duration)
+                + POPULAR_BOOST * popularity(video.view_count, video.timestamp, now);
+            entry.score = entry.score * (1.0 + boosts) - penalty;
             entry.video.reason = Some(entry.reasons.iter().take(2).cloned().collect::<Vec<_>>().join(" + "));
             entry
         })
         .collect();
+    ranked.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.order.cmp(&b.order)));
+    // Walking down the list, each channel's second video keeps 70% of its score, the third 49%...
+    let mut seen: HashMap<String, i32> = HashMap::new();
+    for entry in &mut ranked {
+        if let Some(channel) = &entry.video.channel_id {
+            let count = seen.entry(channel.clone()).or_insert(0);
+            entry.score *= SAME_CHANNEL_DECAY.powi(*count);
+            *count += 1;
+        }
+    }
     ranked.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.order.cmp(&b.order)));
     let (seeded, new): (Vec<_>, Vec<_>) = ranked.into_iter().map(|entry| entry.video).partition(|video| {
         video.channel_id.as_ref().is_some_and(|channel| seed_channels.contains(channel))
@@ -128,13 +164,13 @@ pub fn rank(
 
 /// Words that usually come with an excluded topic, since a title rarely says "kids" outright.
 const RELATED: &[(&str, &[&str])] = &[
-    ("kid", &["child", "children", "toddler", "nursery", "preschool", "cartoon", "sing along", "singalong"]),
+    ("kid", &["child", "children", "toddler", "nursery", "preschool", "sing along", "singalong"]),
     (
         "music",
         &[
-            "song", "lyrics", "lyric", "remix", "album", "official audio", "official music video", "audio",
+            "song", "lyrics", "lyric", "remix", "album", "official audio", "official music video",
             "lofi", "lo-fi", "phonk", "nightcore", "sped up", "slowed", "instrumental", "type beat", "mashup",
-            "edm", "synthwave", "vaporwave", "soundtrack", "ost", "playlist", "mix",
+            "edm", "synthwave", "vaporwave", "soundtrack", "ost",
         ],
     ),
 ];
@@ -190,16 +226,31 @@ fn mix(seeded: Vec<Video>, new: Vec<Video>, share: f64) -> Vec<Video> {
     out
 }
 
+/// Shorts, recognised by length (live streams and premieres have none and pass).
+fn is_short(video: &Video) -> bool {
+    video.duration.is_some_and(|seconds| seconds <= SHORTS_MAX_SECS)
+}
+
+/// 1 up to a year old, 0.5 at two years, 0 from three; 0 when the date is unknown.
 fn recency(timestamp: Option<i64>, now: i64) -> f64 {
     let Some(timestamp) = timestamp else { return 0.0 };
     let age_years = ((now - timestamp) as f64 / 86_400.0 / YEAR_DAYS).max(0.0);
     let share = if age_years <= 1.0 { 1.0 } else { 1.0 - (age_years - 1.0) * 0.5 };
-    RECENT_BOOST * share.clamp(0.0, 1.0)
+    share.clamp(0.0, 1.0)
 }
 
-fn length_boost(duration: Option<f64>) -> f64 {
+/// 0 under 5 minutes, growing to 1 at 40 minutes.
+fn length(duration: Option<f64>) -> f64 {
     let Some(seconds) = duration else { return 0.0 };
-    LONG_BOOST * ((seconds - SHORT_SECS) / (LONG_SECS - SHORT_SECS)).clamp(0.0, 1.0)
+    ((seconds - SHORT_SECS) / (LONG_SECS - SHORT_SECS)).clamp(0.0, 1.0)
+}
+
+/// Views per day since upload on a log scale: 1 at `POPULAR_PER_DAY` or more, 0.5 at its square
+/// root (100 a day), 0 when the count is unknown. An unknown date counts as a year old.
+fn popularity(views: Option<u64>, timestamp: Option<i64>, now: i64) -> f64 {
+    let Some(views) = views else { return 0.0 };
+    let days = timestamp.map_or(YEAR_DAYS, |t| ((now - t) as f64 / 86_400.0).max(1.0));
+    ((views as f64 / days + 1.0).log10() / POPULAR_PER_DAY.log10()).clamp(0.0, 1.0)
 }
 
 /// A search query for "videos like this one": the title without bracketed tags and extra spaces.
@@ -261,9 +312,9 @@ mod tests {
         let fresh = source("y", vec![video("bbbbbbbbbbb", Some(NOW - 86_400))]);
         assert_eq!(ids(&rank_plain(vec![old, fresh], &HashSet::new())), ["bbbbbbbbbbb", "aaaaaaaaaaa"]);
         let at = |years: f64| recency(Some(NOW - (years * 365.0 * 86_400.0) as i64), NOW);
-        assert_eq!(at(0.1), RECENT_BOOST);
-        assert_eq!(at(1.0), RECENT_BOOST);
-        assert!((at(2.0) - RECENT_BOOST / 2.0).abs() < 1e-9);
+        assert_eq!(at(0.1), 1.0);
+        assert_eq!(at(1.0), 1.0);
+        assert!((at(2.0) - 0.5).abs() < 1e-9);
         assert_eq!(at(3.0), 0.0);
         assert_eq!(at(6.0), 0.0);
         assert_eq!(recency(None, NOW), 0.0);
@@ -272,14 +323,14 @@ mod tests {
     #[test]
     fn longer_videos_rank_above_short_ones() {
         let mut short = video("aaaaaaaaaaa", None);
-        short.duration = Some(120.0);
+        short.duration = Some(240.0);
         let mut long = video("bbbbbbbbbbb", None);
         long.duration = Some(3000.0);
         let ranked = rank_plain(vec![source("s", vec![short, long])], &HashSet::new());
         assert_eq!(ids(&ranked), ["bbbbbbbbbbb", "aaaaaaaaaaa"]);
-        assert_eq!(length_boost(Some(60.0)), 0.0);
-        assert_eq!(length_boost(None), 0.0);
-        assert_eq!(length_boost(Some(99_999.0)), LONG_BOOST);
+        assert_eq!(length(Some(200.0)), 0.0);
+        assert_eq!(length(None), 0.0);
+        assert_eq!(length(Some(99_999.0)), 1.0);
     }
 
     #[test]
@@ -388,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn videos_from_new_channels_need_100k_views_but_seed_channels_do_not() {
+    fn videos_from_new_channels_need_2000_views_but_seed_channels_do_not() {
         let from = |id: &str, channel: &str, views: Option<u64>| {
             let mut v = video(id, None);
             v.channel_id = Some(channel.into());
@@ -396,8 +447,8 @@ mod tests {
             v
         };
         let found = vec![
-            from("aaaaaaaaaaa", "UCnew", Some(99_999)),
-            from("bbbbbbbbbbb", "UCnew", Some(100_000)),
+            from("aaaaaaaaaaa", "UCnew", Some(1_999)),
+            from("bbbbbbbbbbb", "UCnew2", Some(2_000)),
             from("ccccccccccc", "UCnew", None),
             from("ddddddddddd", "UCseed", Some(12)),
             from("eeeeeeeeeee", "UCseed", None),
@@ -421,15 +472,88 @@ mod tests {
     }
 
     #[test]
-    fn sources_are_the_newest_seeds_of_each_kind() {
+    fn sources_keep_the_newest_seeds_and_rotate_through_the_older_ones() {
         let seed = |id: i64, kind: &str| Seed { id, kind: kind.into(), value: id.to_string(), label: id.to_string() };
-        let mut seeds: Vec<Seed> = (1..=8).map(|i| seed(i, "theme")).collect();
-        seeds.push(seed(9, "channel"));
-        seeds.push(seed(10, "video"));
-        let (themes, channels, videos) = pick_sources(&seeds);
+        let mut seeds: Vec<Seed> = (1..=12).map(|i| seed(i, "theme")).collect();
+        seeds.push(seed(13, "channel"));
+        seeds.push(seed(14, "video"));
+        let (themes, channels, videos) = pick_sources(&seeds, 0);
         assert_eq!(themes.len(), MAX_THEMES);
-        assert_eq!(themes[0].id, 8);
         assert_eq!((channels.len(), videos.len()), (1, 1));
+        let ids = |rotation| pick_sources(&seeds, rotation).0.iter().map(|s| s.id).collect::<Vec<_>>();
+        // The three newest are always there; every older theme gets its turn within a few hours.
+        let mut seen = HashSet::new();
+        for hour in 0..3 {
+            let picked = ids(hour);
+            assert_eq!(picked[..3], [12, 11, 10]);
+            assert_eq!(picked.iter().collect::<HashSet<_>>().len(), MAX_THEMES);
+            seen.extend(picked);
+        }
+        assert_eq!(seen.len(), 12);
+        // Few enough seeds are all used, newest first.
+        let few: Vec<Seed> = (1..=3).map(|i| seed(i, "theme")).collect();
+        assert_eq!(pick_sources(&few, 7).0.iter().map(|s| s.id).collect::<Vec<_>>(), [3, 2, 1]);
+    }
+
+    #[test]
+    fn shorts_are_never_suggested() {
+        let mut short = video("aaaaaaaaaaa", None);
+        short.duration = Some(59.0);
+        let mut vertical = video("bbbbbbbbbbb", None);
+        vertical.duration = Some(180.0);
+        let mut live = video("ccccccccccc", None);
+        live.duration = None;
+        let mut normal = video("ddddddddddd", None);
+        normal.duration = Some(181.0);
+        let ranked = rank_plain(vec![source("s", vec![short, vertical, live, normal])], &HashSet::new());
+        let mut kept = ids(&ranked);
+        kept.sort();
+        assert_eq!(kept, ["ccccccccccc", "ddddddddddd"]);
+    }
+
+    #[test]
+    fn boosts_reorder_close_matches_but_do_not_lift_a_weak_one_over_the_top_result() {
+        let mut top = video("aaaaaaaaaaa", Some(NOW - 4 * 365 * 86_400));
+        top.duration = Some(480.0);
+        let filler = (0..10).map(|i| video(&format!("filler{i:05}"), Some(NOW - 4 * 365 * 86_400)));
+        let mut last = video("bbbbbbbbbbb", Some(NOW - 30 * 86_400));
+        last.duration = Some(2400.0);
+        let mut found = vec![top];
+        found.extend(filler);
+        found.push(last);
+        let ranked = rank_plain(vec![source("s", found)], &HashSet::new());
+        assert_eq!(ranked[0].id, "aaaaaaaaaaa");
+        assert_ne!(ranked[1].id, "bbbbbbbbbbb");
+    }
+
+    #[test]
+    fn one_channel_does_not_fill_the_top_of_the_list() {
+        let from = |id: &str, channel: &str| {
+            let mut v = video(id, None);
+            v.channel_id = Some(channel.into());
+            v
+        };
+        let found = vec![
+            from("big00000001", "UCbig"),
+            from("big00000002", "UCbig"),
+            from("big00000003", "UCbig"),
+            from("other000001", "UCother"),
+        ];
+        let ranked = rank_plain(vec![source("s", found)], &HashSet::new());
+        assert_eq!(ids(&ranked), ["big00000001", "other000001", "big00000002", "big00000003"]);
+    }
+
+    #[test]
+    fn popularity_counts_views_per_day_on_a_log_scale() {
+        let day = 86_400;
+        assert_eq!(popularity(None, Some(NOW - day), NOW), 0.0);
+        assert_eq!(popularity(Some(1_000_000), Some(NOW - day), NOW), 1.0);
+        // 3,000 views in 30 days is 100 a day: half way.
+        assert!((popularity(Some(3_000), Some(NOW - 30 * day), NOW) - 0.5).abs() < 0.01);
+        // A young niche video is not far behind an old popular one.
+        let young = popularity(Some(15_000), Some(NOW - 60 * day), NOW);
+        let old = popularity(Some(400_000), Some(NOW - 5 * 365 * day), NOW);
+        assert!(young > old);
     }
 
     #[test]

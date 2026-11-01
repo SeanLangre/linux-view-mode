@@ -17,7 +17,7 @@ Status: implemented 2026-11-01 (build order below), not yet tried with real use.
    - Each seed channel contributes its latest uploads.
 3. **Scoring** (first version, to be tuned):
    - The more seeds a candidate matches, the higher it scores.
-   - Boosts for recency and length; half of the list is reserved for channels that are not seeds, and those need 100,000+ views.
+   - Boosts for recency, length and views per day multiply the relevance; one channel's further videos count less; half of the list is reserved for channels that are not seeds, and those need 2,000+ views. Shorts are never suggested.
    - Anything already in the profile's history is dropped.
    - A dismissed video is a negative signal.
 4. **UI**:
@@ -41,4 +41,11 @@ Discovery runs as **Guest** (no account cookies), decided 2026-11-01, so searche
 - [x] 3e. Videos from channels that are not channel seeds need 100,000+ views (unknown counts do not pass); seed channels are exempt (`MIN_NEW_CHANNEL_VIEWS`). Missing counts are looked up with yt-dlp, up to 8 per refresh, remembered a week (`Feeds::fill_view_counts`). Implemented 2026-11-01.
 - [x] 3f. Exclusions also match plural forms, a few related words (`RELATED` in `src/discover.rs`: `kids` → children, cartoon, sing along…; `music` → song, lyrics, remix, phonk, lofi…) and, for single words of 4+ letters, the inside of a channel name (`kids` hides "kidstv123"). Videos missing a view count or date in one list take it from another list that has it. Implemented 2026-11-01.
 - [x] 3g. Screen changes: a **History** button (CouchTube's own history, feed kind `local`), **W** marks a video watched or clears it (`POST /api/watched`, local only), watched/resume badges on every list, and the Search/Profiles footer hints are hidden on For You. Implemented 2026-11-01.
+- [x] 3h. Ranking revised (2026-11-01) after a real search showed niche themes' top results all under 100k views, so the old minimum emptied the new-channel half:
+  - Boosts multiply relevance instead of adding to it: `relevance × (1 + 0.4·recency + 0.3·length + 0.3·popularity)`. Recency and length keep their curves (0–1); popularity is views per day since upload on a log scale (1 at 10,000/day, 0.5 at 100/day). Before, +1.4 of boosts outweighed a first place (1.0), so recent long videos beat better matches.
+  - The minimum for non-seed channels drops from 100,000 to 2,000 views (spam guard only).
+  - Each further video of one channel keeps 70% of the previous one's share (0.7, 0.49…), so one channel cannot fill the top.
+  - Shorts are dropped: anything 3 minutes or shorter (search results link Shorts as normal watch URLs, so length is the only sign). Live streams have no length and stay.
+  - Seeds rotate: with more seeds of a kind than its maximum, the newest half of the slots go to the newest seeds and the rest rotate through the older ones by the hour, so no seed is ignored for good.
+  - Exclusion related words narrowed: `music` no longer hides "mix", "audio" or "playlist"; `kids` no longer hides "cartoon".
 - [x] 4. Recorded in `plan.md` and `TODO.md`.
