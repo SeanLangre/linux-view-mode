@@ -12,6 +12,8 @@ export type Video = {
   /** Upload time, Unix seconds (approximate). */
   timestamp?: number | null
   resume_position?: number
+  /** Watched to the end by this profile. */
+  completed?: boolean
   /** Why For You suggested it. */
   reason?: string
 }

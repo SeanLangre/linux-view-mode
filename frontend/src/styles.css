@@ -316,3 +316,7 @@ button:disabled, select:disabled { opacity: 0.5; }
 .pairing .pairing-ok { color: #8fe3a8; font-weight: 600; }
 
 .card-reason { opacity: 0.75; font-style: italic; }
+
+.watched-badge { background: rgb(20 110 50 / 0.9); }
+.progress-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 0.25rem; background: rgb(255 255 255 / 0.3); }
+.progress-bar > div { height: 100%; background: #e53935; }

@@ -656,6 +656,7 @@ function VideoCard({ video, focused }: { video: Video; focused: boolean }) {
   return (
     <div className={`card ${focused ? 'focused' : ''}`}>
       <div className="thumb">
+        {video.completed && <span className="resume-badge watched-badge">✓ Watched</span>}
         {video.resume_position !== undefined && <span className="resume-badge">Resume {formatDuration(video.resume_position)}</span>}
         <img
           src={video.thumb}
@@ -672,6 +673,9 @@ function VideoCard({ video, focused }: { video: Video; focused: boolean }) {
         <span className={`badge ${video.duration === null ? 'live' : ''}`}>
           {formatDuration(video.duration)}
         </span>
+        {video.resume_position !== undefined && video.duration ? (
+          <div className="progress-bar"><div style={{ width: `${Math.min(100, (video.resume_position / video.duration) * 100)}%` }} /></div>
+        ) : null}
       </div>
       <div className="card-title">{video.title}</div>
       <div className="card-meta">{meta}</div>

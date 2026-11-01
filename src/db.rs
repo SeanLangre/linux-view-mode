@@ -338,7 +338,7 @@ impl Database {
         self.with(move |db| {
             let mut query = db.prepare("SELECT v.json,p.position,p.completed FROM progress p JOIN videos v ON v.profile_id=p.profile_id AND v.video_id=p.video_id WHERE p.profile_id=?1 AND (NOT ?2 OR (p.completed=0 AND p.position>=5 AND (p.duration IS NULL OR p.position < p.duration-5))) ORDER BY p.updated_at DESC,p.rowid DESC LIMIT 24")?;
             let rows = query.query_map(params![profile,continuing], |r| Ok((r.get::<_,String>(0)?,r.get::<_,f64>(1)?,r.get::<_,bool>(2)?)))?;
-            rows.map(|row| { let (json,pos,completed) = row?; let mut video: Video = serde_json::from_str(&json)?; video.resume_position = (!completed && pos>=5.0).then_some(pos); Ok(video) }).collect()
+            rows.map(|row| { let (json,pos,completed) = row?; let mut video: Video = serde_json::from_str(&json)?; video.resume_position = (!completed && pos>=5.0).then_some(pos); video.completed = completed; Ok(video) }).collect()
         }).await
     }
 
@@ -460,6 +460,30 @@ impl Database {
             Ok(())
         })
         .await
+    }
+
+    /// Marks which of `videos` this profile has started or finished, for the card badges.
+    pub async fn annotate(&self, profile: &str, videos: &mut [Video]) -> Result<()> {
+        if videos.is_empty() {
+            return Ok(());
+        }
+        let profile = profile.to_owned();
+        let progress: std::collections::HashMap<String, (f64, Option<f64>, bool)> = self
+            .with(move |db| {
+                let mut statement = db.prepare("SELECT video_id,position,duration,completed FROM progress WHERE profile_id=?1")?;
+                Ok(statement
+                    .query_map([profile], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, f64>(1)?, r.get::<_, Option<f64>>(2)?, r.get::<_, bool>(3)?))))?
+                    .collect::<rusqlite::Result<_>>()?)
+            })
+            .await?;
+        for video in videos {
+            if let Some(&(position, duration, completed)) = progress.get(&video.id) {
+                let nearly_done = duration.is_some_and(|d| position >= d - 5.0);
+                video.completed = completed || nearly_done;
+                video.resume_position = (!video.completed && position >= 5.0).then_some(position);
+            }
+        }
+        Ok(())
     }
 
     /// Every video this profile has started watching; "For You" leaves these out.

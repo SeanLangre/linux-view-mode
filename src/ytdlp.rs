@@ -32,6 +32,9 @@ pub struct Video {
     pub timestamp: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_position: Option<f64>,
+    /// The profile watched this to the end; filled per profile when a list is served.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub completed: bool,
     /// Why "For You" suggested this video; never stored with the video itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -81,6 +84,7 @@ impl Video {
             thumb: format!("https://i.ytimg.com/vi/{id}/hqdefault.jpg"),
             timestamp: None,
             resume_position: None,
+            completed: false,
             reason: None,
         }
     }
@@ -299,6 +303,7 @@ fn parse_playlist(json: &[u8]) -> Result<Playlist> {
                 timestamp: e.timestamp,
                 id,
                 resume_position: None,
+            completed: false,
                 reason: None,
             })
         })

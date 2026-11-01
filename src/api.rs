@@ -124,15 +124,16 @@ async fn search(
         let _transition = state.transition.lock().await;
         state.profiles.active().await.map_err(internal)?
     };
-    state
+    let mut videos = state
         .feeds
         .search(&account, &query, limit, params.refresh)
         .await
-        .map(Json)
         .map_err(|err| {
             tracing::error!("search for {query:?} failed: {err:#}");
             ApiError::new(StatusCode::BAD_GATEWAY, "search failed, try again")
-        })
+        })?;
+    annotate(&state, &account.profile.id, &mut videos).await;
+    Ok(Json(videos))
 }
 
 async fn channel(
@@ -148,15 +149,16 @@ async fn channel(
         let _transition = state.transition.lock().await;
         state.profiles.active().await.map_err(internal)?
     };
-    state
+    let mut channel = state
         .feeds
         .channel(&account, &id, query.page.min(ytdlp::MAX_PAGE), query.refresh)
         .await
-        .map(Json)
         .map_err(|err| {
             tracing::error!("channel {id} failed: {err:#}");
             ApiError::new(StatusCode::BAD_GATEWAY, "could not load channel, try again")
-        })
+        })?;
+    annotate(&state, &account.profile.id, &mut channel.videos).await;
+    Ok(Json(channel))
 }
 
 /// An error sent to the frontend as `{"error": "..."}`.
@@ -538,15 +540,16 @@ async fn feed(
             let guest = state.profiles.account("guest").await.map_err(internal)?.ok_or_else(|| internal(anyhow::anyhow!("guest profile missing")))?;
             (account, guest)
         };
-        return state
+        let mut videos = state
             .feeds
             .foryou(&account.profile.id, &guest, query.page.min(ytdlp::MAX_PAGE), query.refresh)
             .await
-            .map(Json)
             .map_err(|err| {
                 tracing::warn!(profile_id=%account.profile.id,"For You failed: {err:#}");
                 ApiError::new(StatusCode::BAD_GATEWAY, "could not find videos right now; try again")
-            });
+            })?;
+        annotate(&state, &account.profile.id, &mut videos).await;
+        return Ok(Json(videos));
     }
     if kind != "continue" && ytdlp::feed_target(&kind).is_none() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "unknown feed"));
@@ -555,18 +558,26 @@ async fn feed(
         let _transition = state.transition.lock().await;
         state.profiles.active().await.map_err(internal)?
     };
-    state
+    let mut videos = state
         .feeds
         .feed(&account, &kind, query.page.min(ytdlp::MAX_PAGE), query.refresh)
         .await
-        .map(Json)
         .map_err(|err| {
             tracing::warn!(profile_id=%account.profile.id,kind,"feed failed: {err:#}");
             ApiError::new(
                 StatusCode::BAD_GATEWAY,
                 "could not load this feed; check your connection or sign in again",
             )
-        })
+        })?;
+    annotate(&state, &account.profile.id, &mut videos).await;
+    Ok(Json(videos))
+}
+
+/// Adds this profile's started/finished state to a list; a failure only hides the badges.
+async fn annotate(state: &AppState, profile: &str, videos: &mut [Video]) {
+    if let Err(err) = state.feeds.0.annotate(profile, videos).await {
+        tracing::warn!(profile_id=%profile,"could not load watch progress: {err:#}");
+    }
 }
 /// How many videos from the history feed `check` resolves and fetches thumbnails for.
 const CHECK_SAMPLE: usize = 3;
