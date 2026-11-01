@@ -188,7 +188,8 @@ impl Feeds {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
-        let videos = discover::rank(sources, &known, &dismissed_channels, now);
+        let seed_channels = seeds.iter().filter(|s| s.kind == "channel").map(|s| s.value.clone()).collect();
+        let videos = discover::rank(sources, &known, &dismissed_channels, &seed_channels, now);
         // The reason belongs to this list only, so the shared video table keeps none.
         let stored = videos.iter().cloned().map(|mut v| { v.reason = None; v }).collect();
         self.0

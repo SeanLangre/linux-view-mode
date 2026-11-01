@@ -21,6 +21,9 @@ const DISMISS_PENALTY: f64 = 0.5;
 const MAX_PENALTY: f64 = 1.5;
 /// Longer videos are preferred: no boost under 5 minutes, growing to `LONG_BOOST` at 40 minutes.
 const LONG_BOOST: f64 = 0.6;
+/// Share of the list kept for videos from channels that are not seed channels, so the list
+/// is not only the seeded channels' own uploads.
+const NEW_CHANNEL_SHARE: f64 = 0.3;
 const SHORT_SECS: f64 = 300.0;
 const LONG_SECS: f64 = 2400.0;
 
@@ -43,11 +46,13 @@ pub struct Source {
 /// A video scores more the higher it sits in a source and the more sources list it; videos
 /// uploaded in the last year get 0.8 points extra, fading to half at two years and nothing at three, and videos from channels the
 /// user dismissed things from lose points. Videos in `known` are dropped. Each video's
-/// `reason` names the sources that found it.
+/// `reason` names the sources that found it. About 30% of the list is then reserved for the
+/// best videos from channels outside `seed_channels` (the channels the user already follows as seeds).
 pub fn rank(
     sources: Vec<Source>,
     known: &HashSet<String>,
     dismissed_channels: &HashMap<String, u32>,
+    seed_channels: &HashSet<String>,
     now: i64,
 ) -> Vec<Video> {
     struct Entry { score: f64, order: usize, reasons: Vec<String>, video: Video }
@@ -81,7 +86,24 @@ pub fn rank(
         })
         .collect();
     ranked.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.order.cmp(&b.order)));
-    ranked.into_iter().map(|entry| entry.video).collect()
+    let (seeded, new): (Vec<_>, Vec<_>) = ranked.into_iter().map(|entry| entry.video).partition(|video| {
+        video.channel_id.as_ref().is_some_and(|channel| seed_channels.contains(channel))
+    });
+    mix(seeded, new, NEW_CHANNEL_SHARE)
+}
+
+/// Interleaves two ranked lists so `new` takes `share` of the slots, spread evenly; when one
+/// list runs out the other fills the rest.
+fn mix(seeded: Vec<Video>, new: Vec<Video>, share: f64) -> Vec<Video> {
+    let total = seeded.len() + new.len();
+    let (mut seeded, mut new) = (seeded.into_iter(), new.into_iter());
+    let mut out = Vec::with_capacity(total);
+    for i in 0..total {
+        let wants_new = ((i + 1) as f64 * share).floor() > (i as f64 * share).floor();
+        let next = if wants_new { new.next().or_else(|| seeded.next()) } else { seeded.next().or_else(|| new.next()) };
+        out.extend(next);
+    }
+    out
 }
 
 fn recency(timestamp: Option<i64>, now: i64) -> f64 {
@@ -127,7 +149,7 @@ mod tests {
         videos.iter().map(|v| v.id.as_str()).collect()
     }
     fn rank_plain(sources: Vec<Source>, known: &HashSet<String>) -> Vec<Video> {
-        rank(sources, known, &HashMap::new(), NOW)
+        rank(sources, known, &HashMap::new(), &HashSet::new(), NOW)
     }
     const NOW: i64 = 1_800_000_000;
 
@@ -183,8 +205,26 @@ mod tests {
         disliked.channel_id = Some("UCdisliked".into());
         let s = source("s", vec![disliked, liked]);
         let dismissed = HashMap::from([("UCdisliked".to_string(), 2)]);
-        let ranked = rank(vec![s], &HashSet::new(), &dismissed, NOW);
+        let ranked = rank(vec![s], &HashSet::new(), &dismissed, &HashSet::new(), NOW);
         assert_eq!(ids(&ranked), ["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    }
+
+    #[test]
+    fn a_third_of_the_list_comes_from_channels_that_are_not_seeds() {
+        let from = |id: &str, channel: &str| {
+            let mut v = video(id, None);
+            v.channel_id = Some(channel.into());
+            v
+        };
+        let mut found: Vec<Video> = (0..10).map(|i| from(&format!("seeded{i:05}"), "UCseed")).collect();
+        found.extend((0..10).map(|i| from(&format!("fresh{i:06}"), "UCnew")));
+        let seeds = HashSet::from(["UCseed".to_string()]);
+        let ranked = rank(vec![source("s", found)], &HashSet::new(), &HashMap::new(), &seeds, NOW);
+        let new_in_top_10 = ranked.iter().take(10).filter(|v| v.channel_id.as_deref() == Some("UCnew")).count();
+        assert_eq!(new_in_top_10, 3);
+        // With no new-channel videos at all, the seeded ones still fill the list.
+        let only = vec![from("aaaaaaaaaaa", "UCseed"), from("bbbbbbbbbbb", "UCseed")];
+        assert_eq!(rank(vec![source("s", only)], &HashSet::new(), &HashMap::new(), &seeds, NOW).len(), 2);
     }
 
     #[test]
