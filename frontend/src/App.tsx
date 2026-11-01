@@ -11,6 +11,7 @@ type Screen =
   | { kind: 'channel'; id: string; name: string | null }
   | { kind: 'feed'; feed: api.FeedKind }
   | { kind: 'queue' }
+  | { kind: 'foryou' }
   | { kind: 'remote' }
 
 /** One level of the back stack. Focus is kept per level so Back returns to the same card. */
@@ -19,11 +20,13 @@ type Entry = { screen: Screen; focus: Focus }
 type Row =
   | { kind: 'search-button' }
   | { kind: 'search-input' }
+  | { kind: 'seed-input' }
   | { kind: 'chips'; title: string; items: string[] }
   | { kind: 'menu'; items: { label: string; action: string }[] }
   | { kind: 'videos'; title?: string; videos: Video[]; carousel: boolean; error?: string }
 
 const HOME_MENU = [
+  { label: 'For You', action: 'foryou' },
   { label: 'Recommended', action: 'recommended' }, { label: 'Subscriptions', action: 'subscriptions' },
   { label: 'History', action: 'history' }, { label: 'Watch later', action: 'watchlater' },
   { label: 'Liked', action: 'liked' }, { label: 'Queue', action: 'queue' },
@@ -40,7 +43,7 @@ const languageName = (code: string | null) =>
 /** Menu entries that need a signed-in YouTube account. */
 const ACCOUNT_ACTIONS = ['recommended', 'subscriptions', 'watchlater', 'liked']
 const FEED_NAMES: Record<api.FeedKind, string> = {
-  continue: 'Continue watching', recommended: 'Recommended', subscriptions: 'Subscriptions',
+  foryou: 'For You', continue: 'Continue watching', recommended: 'Recommended', subscriptions: 'Subscriptions',
   history: 'History', watchlater: 'Watch later', liked: 'Liked videos',
 }
 
@@ -70,6 +73,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
   const [cec, setCec] = useState(false)
   useEffect(() => { api.tvPowerAvailable().then((r) => setCec(r.available), () => {}) }, [])
   const [remote, setRemote] = useState<api.RemoteInfo | null>(null)
+  const [seeds, setSeeds] = useState<api.Seed[]>([])
   const refreshRequested = useRef(false)
   const [feedback, setFeedback] = useState<string | null>(null)
   const feedbackTimer = useRef<number | undefined>(undefined)
@@ -163,13 +167,17 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
             { label: 'Turn off', action: 'remote-off' }]
         return [{ kind: 'menu', items }]
       }
+      case 'foryou':
+        return [{ kind: 'seed-input' },
+          ...(seeds.length > 0 ? [{ kind: 'chips', title: 'Your seeds', items: seeds.map((seed) => `${seed.kind === 'theme' ? 'Theme' : seed.kind === 'video' ? 'Video' : 'Channel'}: ${seed.label}`) } as const] : []),
+          ...data.rows]
       case 'queue':
         return [{ kind: 'menu', items: [{ label: 'Play next', action: 'next' }, { label: 'Clear queue', action: 'clear' }] }, ...data.rows]
       case 'feed':
       case 'channel':
         return data.rows
     }
-  }, [screen.kind, recent, data.rows, hasAccount, subtitles, cec, remote])
+  }, [screen.kind, recent, data.rows, hasAccount, subtitles, cec, remote, seeds])
 
   const specs: RowSpec[] = rows.map((row) => ({
     length: rowLength(row),
@@ -177,7 +185,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
   }))
   const focus = clamp(stack[stack.length - 1].focus, specs)
   const focusedRow = rows.length > 0 ? rows[focus.row] : undefined
-  const inputFocused = focusedRow?.kind === 'search-input'
+  const inputFocused = focusedRow?.kind === 'search-input' || focusedRow?.kind === 'seed-input'
 
   const setFocus = (next: Focus) =>
     setStack((s) => [...s.slice(0, -1), { ...s[s.length - 1], focus: next }])
@@ -222,6 +230,35 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
     } catch (err) { notify((err as Error).message) }
   }
 
+  // The For You screen lists the seeds that drive our own recommendations.
+  useEffect(() => {
+    if (screen.kind !== 'foryou') return
+    let cancelled = false
+    api.seeds().then((list) => { if (!cancelled) setSeeds(list) }, (err: Error) => notify(err.message))
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen.kind, profile.id])
+
+  /** A pasted YouTube link becomes a video seed; anything else is a theme. */
+  async function submitSeed() {
+    const text = draft.trim()
+    if (!text) return
+    const isLink = /^(https?:\/\/|[\w-]{11}$)/.test(text)
+    try {
+      setSeeds(await api.addSeed(isLink ? 'video' : 'theme', text))
+      setDataRevision((value) => value + 1)
+      setDraft('')
+      notify(isLink ? 'Video added to your seeds' : `Theme added: ${text}`)
+    } catch (err) { notify((err as Error).message) }
+  }
+
+  async function removeFocusedSeed() {
+    if (focusedRow?.kind !== 'chips') return
+    const seed = seeds[focus.col]
+    if (!seed) return
+    try { setSeeds(await api.removeSeed(seed.id)); setDataRevision((value) => value + 1) } catch (err) { notify((err as Error).message) }
+  }
+
   function openSearch() {
     if (screen.kind === 'search') setFocus(START)
     else push({ kind: 'search', query: '' })
@@ -240,6 +277,17 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
 
   function focusedVideo(): Video | undefined {
     return focusedRow?.kind === 'videos' ? focusedRow.videos[focus.col] : undefined
+  }
+
+  /** Adds the focused video's channel to the seeds, so For You finds more from it. */
+  async function seedFocusedChannel() {
+    const video = focusedVideo()
+    if (!video?.channel_id) return
+    try {
+      setSeeds(await api.addSeed('channel', video.channel_id, video.channel ?? undefined))
+      setDataRevision((value) => value + 1)
+      notify(`Added to For You: ${video.channel ?? 'channel'}`)
+    } catch (err) { notify((err as Error).message) }
   }
 
   function openChannel() {
@@ -280,6 +328,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
       case 'menu': {
         const action = focusedRow.items[focus.col]?.action
         if (action === 'queue') push({ kind: 'queue' })
+        else if (action === 'foryou') push({ kind: 'foryou' })
         else if (action === 'remote') push({ kind: 'remote' })
         else if (action?.startsWith('remote-')) void remoteAction(action)
         else if (action === 'youtube-tv') void api.youtubeTv().then(() => notify('YouTube TV is opening. Close its window (Alt+F4) to come back.'), (err: Error) => notify(err.message))
@@ -294,7 +343,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
         break
       }
       case 'chips':
-        runSearch(focusedRow.items[focus.col])
+        if (screen.kind !== 'foryou') runSearch(focusedRow.items[focus.col])
         break
       case 'videos':
         { const video = focusedVideo(); if (video) void startVideo(video) }
@@ -311,7 +360,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
         else if (e.key === 'Escape' || e.key === 'Backspace') {
           e.preventDefault()
           if (!starting) void stopVideo()
-        } else if (ARROWS[e.key] || ['Enter', '/', 'Home', 'c'].includes(e.key)) {
+        } else if (ARROWS[e.key] || ['Enter', '/', 'Home', 'c', 's'].includes(e.key)) {
           e.preventDefault()
         }
         return
@@ -357,6 +406,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
           break
         case 'd':
           if (screen.kind === 'queue') void queueAction('remove')
+          else if (screen.kind === 'foryou') void removeFocusedSeed()
           break
         case 'n':
           void queueAction('next')
@@ -368,6 +418,9 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
           break
         case 'p':
           onSwitch()
+          break
+        case 's':
+          void seedFocusedChannel()
           break
         case 'c':
           openChannel()
@@ -386,6 +439,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
 
   useEffect(() => {
     if (screen.kind === 'search') setDraft(screen.query)
+    else if (screen.kind === 'foryou') setDraft('')
     // Only when the screen changes, not on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
@@ -411,6 +465,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
       {screen.kind === 'home' && <h1 className="page-title">What do you want to watch?</h1>}
       {screen.kind === 'feed' && <h1 className="page-title">{FEED_NAMES[screen.feed]}</h1>}
       {screen.kind === 'queue' && <h1 className="page-title">Up next</h1>}
+      {screen.kind === 'foryou' && <h1 className="page-title">For You</h1>}
       {screen.kind === 'remote' && <h1 className="page-title">Phone remote</h1>}
       {screen.kind === 'channel' && <h1 className="page-title">{screen.name ?? 'Channel'}</h1>}
 
@@ -422,7 +477,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
           inputRef={inputRef}
           draft={draft}
           onDraft={setDraft}
-          onSubmit={() => runSearch(draft)}
+          onSubmit={() => row.kind === 'seed-input' ? void submitSeed() : runSearch(draft)}
         />
       ))}
 
@@ -447,6 +502,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
       {(data.loading || data.loadingMore) && <SkeletonRow />}
       {!data.loading && !data.error && !data.rows.some((row) => row.kind === 'videos' && row.videos.length > 0) && (
         <p className="status">{screen.kind === 'home' ? 'Search for a video, or sign in to load your recommendations and subscriptions.'
+          : screen.kind === 'foryou' ? 'Type a theme above to start. Press S on any video to seed its channel. Pasted video links are saved for a later step.'
           : screen.kind === 'queue' ? 'Your queue is empty. Press A on a video to add it.'
           : screen.kind === 'feed' ? 'No videos here. Account feeds need a signed-in profile; press U to refresh.' : ''}</p>
       )}
@@ -468,7 +524,8 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
         <span><kbd>Enter</kbd>{videoRowFocused ? 'Play' : 'Select'}</span>
         {videoRowFocused && <span><kbd>A</kbd>Queue</span>}
         {videoRowFocused && <span><kbd>C</kbd>Channel</span>}
-        {screen.kind === 'queue' && <span><kbd>D</kbd>Remove</span>}
+        {videoRowFocused && <span><kbd>S</kbd>Seed channel</span>}
+        {(screen.kind === 'queue' || (screen.kind === 'foryou' && focusedRow?.kind === 'chips')) && <span><kbd>D</kbd>Remove</span>}
         <span><kbd>N</kbd>Next</span>
         <span><kbd>U</kbd>Refresh</span>
         <span><kbd>/</kbd>Search</span>
@@ -529,6 +586,21 @@ function RowView({
             onChange={(e) => onDraft(e.target.value)}
             placeholder="Search YouTube…"
             aria-label="Search YouTube"
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </form>
+      )
+    case 'seed-input':
+      return (
+        <form onSubmit={(e) => { e.preventDefault(); onSubmit() }}>
+          <input
+            ref={inputRef}
+            className="search-box"
+            value={draft}
+            onChange={(e) => onDraft(e.target.value)}
+            placeholder="Add a theme, or paste a YouTube link…"
+            aria-label="Add a theme or video to your seeds"
             spellCheck={false}
             autoComplete="off"
           />
@@ -681,7 +753,7 @@ function useScreenRows(screen: Screen, revision: number, refreshRequested: RefOb
 
 /** Screens that load more videos when focus reaches the bottom. */
 function paged(screen: Screen): boolean {
-  return screen.kind === 'feed' || screen.kind === 'channel'
+  return screen.kind === 'feed' || screen.kind === 'channel' || screen.kind === 'foryou'
 }
 
 function pageTitle(screen: Screen): string | undefined {
@@ -690,6 +762,7 @@ function pageTitle(screen: Screen): string | undefined {
 
 function loadPage(screen: Screen, page: number, refresh: boolean): Promise<Video[]> {
   if (screen.kind === 'feed') return api.feed(screen.feed, refresh, page)
+  if (screen.kind === 'foryou') return api.feed('foryou', refresh, page)
   if (screen.kind === 'channel') return api.channel(screen.id, page, refresh).then((c) => c.videos)
   return Promise.resolve([])
 }
@@ -732,6 +805,7 @@ function rowLength(row: Row): number {
   switch (row.kind) {
     case 'search-button':
     case 'search-input':
+    case 'seed-input':
       return 1
     case 'menu':
     case 'chips':
@@ -748,6 +822,7 @@ function screenKey(screen: Screen): string {
     case 'search':
       return `search:${screen.query}`
     case 'queue': return 'queue'
+    case 'foryou': return 'foryou'
     case 'remote': return 'remote'
     case 'feed': return `feed:${screen.feed}`
     case 'channel':
@@ -762,6 +837,7 @@ function crumb(screen: Screen): string {
     case 'search':
       return 'Search'
     case 'queue': return 'Queue'
+    case 'foryou': return 'For You'
     case 'remote': return 'Phone remote'
     case 'feed': return FEED_NAMES[screen.feed]
     case 'channel':

@@ -1,6 +1,7 @@
 mod api;
 mod cec;
 mod db;
+mod discover;
 mod feeds;
 mod pairing;
 mod playback;

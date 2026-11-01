@@ -59,6 +59,8 @@ pub fn router(state: AppState) -> Router {
         .route("/check", get(check))
         .route("/queue", get(queue).post(enqueue).delete(clear_queue))
         .route("/queue/{id}", axum::routing::delete(remove_queue))
+        .route("/seeds", get(seeds).post(add_seed))
+        .route("/seeds/{id}", axum::routing::delete(remove_seed))
         .route("/next", post(next))
         .route("/search", get(search))
         .route("/channel/{id}", get(channel))
@@ -528,6 +530,23 @@ async fn feed(
     Path(kind): Path<String>,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<Vec<Video>>, ApiError> {
+    if kind == "foryou" {
+        let (account, guest) = {
+            let _transition = state.transition.lock().await;
+            let account = state.profiles.active().await.map_err(internal)?;
+            let guest = state.profiles.account("guest").await.map_err(internal)?.ok_or_else(|| internal(anyhow::anyhow!("guest profile missing")))?;
+            (account, guest)
+        };
+        return state
+            .feeds
+            .foryou(&account.profile.id, &guest, query.page.min(ytdlp::MAX_PAGE), query.refresh)
+            .await
+            .map(Json)
+            .map_err(|err| {
+                tracing::warn!(profile_id=%account.profile.id,"For You failed: {err:#}");
+                ApiError::new(StatusCode::BAD_GATEWAY, "could not find videos right now; try again")
+            });
+    }
     if kind != "continue" && ytdlp::feed_target(&kind).is_none() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "unknown feed"));
     }
@@ -654,6 +673,65 @@ async fn remove_queue(
         .await
         .map_err(internal)?;
     Ok(Json(json!({"status":"removed"})))
+}
+async fn seeds(State(state): State<AppState>) -> Result<Json<Vec<crate::db::Seed>>, ApiError> {
+    let account = state.profiles.active().await.map_err(internal)?;
+    state.profiles.db.seeds(&account.profile.id).await.map(Json).map_err(internal)
+}
+#[derive(Deserialize)]
+struct NewSeed {
+    kind: String,
+    value: String,
+    label: Option<String>,
+}
+/// Turns what the user typed into a stored seed: a theme is free text, a video is a pasted link or id.
+fn parse_seed(kind: &str, value: &str, label: Option<&str>) -> Result<(String, String), ApiError> {
+    let bad = |message: &'static str| ApiError::new(StatusCode::BAD_REQUEST, message);
+    match kind {
+        "theme" => {
+            let theme = value.split_whitespace().collect::<Vec<_>>().join(" ");
+            if theme.is_empty() || theme.chars().count() > 80 {
+                return Err(bad("a theme must be 1 to 80 characters"));
+            }
+            Ok((theme.clone(), theme))
+        }
+        "video" => {
+            let id = crate::remote::video_id(value).ok_or_else(|| bad("expected a YouTube link or video id"))?;
+            Ok((id.clone(), id))
+        }
+        "channel" => {
+            let id = value.trim();
+            if !ytdlp::is_channel_id(id) {
+                return Err(bad("invalid channel id"));
+            }
+            let name = label.map(|l| l.chars().filter(|c| !c.is_control()).take(80).collect::<String>());
+            Ok((id.to_string(), name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| id.to_string())))
+        }
+        _ => Err(bad("kind must be theme, video or channel")),
+    }
+}
+async fn add_seed(
+    State(state): State<AppState>,
+    body: Result<Json<NewSeed>, JsonRejection>,
+) -> Result<Json<Vec<crate::db::Seed>>, ApiError> {
+    let Json(seed) = body
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "expected {kind, value} JSON"))?;
+    let (value, label) = parse_seed(&seed.kind, &seed.value, seed.label.as_deref())?;
+    let account = state.profiles.active().await.map_err(internal)?;
+    let db = &state.profiles.db;
+    db.add_seed(&account.profile.id, &seed.kind, &value, &label).await.map_err(internal)?;
+    db.cache_delete(&account.profile.id, crate::feeds::Feeds::FORYOU_KEY).await.map_err(internal)?;
+    db.seeds(&account.profile.id).await.map(Json).map_err(internal)
+}
+async fn remove_seed(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<Vec<crate::db::Seed>>, ApiError> {
+    let account = state.profiles.active().await.map_err(internal)?;
+    let db = &state.profiles.db;
+    db.remove_seed(&account.profile.id, id).await.map_err(internal)?;
+    db.cache_delete(&account.profile.id, crate::feeds::Feeds::FORYOU_KEY).await.map_err(internal)?;
+    db.seeds(&account.profile.id).await.map(Json).map_err(internal)
 }
 async fn next(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     let _transition = state.transition.lock().await;

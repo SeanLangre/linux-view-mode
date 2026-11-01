@@ -123,9 +123,19 @@ export function setProfileScope(id: string) {
   profileScope = id
 }
 
-export type FeedKind = 'continue' | 'recommended' | 'subscriptions' | 'history' | 'watchlater' | 'liked'
+export type FeedKind = 'foryou' | 'continue' | 'recommended' | 'subscriptions' | 'history' | 'watchlater' | 'liked'
 export const feed = (kind: FeedKind, refresh = false, page = 0) =>
   playback<Video[]>(`feed/${kind}?page=${page}${refresh ? '&refresh=true' : ''}`)
+export type Seed = { id: number; kind: 'theme' | 'video' | 'channel'; value: string; label: string }
+export const seeds = () => playback<Seed[]>('seeds')
+export const addSeed = (kind: 'theme' | 'video' | 'channel', value: string, label?: string) =>
+  playback<Seed[]>('seeds', { kind, value, label })
+export async function removeSeed(id: number) {
+  const res = await fetch(`/api/seeds/${id}`, { method: 'DELETE' })
+  const body = await res.json().catch(() => null)
+  if (!res.ok) throw new Error(body?.error ?? `request failed (${res.status})`)
+  return body as Seed[]
+}
 export const queue = () => playback<Video[]>('queue')
 export const enqueue = (id: string) => playback<Video[]>('queue', { id })
 export const next = () => playback<{ playing: boolean }>('next', {})

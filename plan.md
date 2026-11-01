@@ -7,14 +7,12 @@ How to run the code is in `README.md`; the working checklist is `TODO.md`.
 ### Status (2026-10-25)
 | Phase | State |
 |---|---|
-| Server setup (Windows → Arch) | Not started |
-| 0 — Server checks | Not started (needs the Arch install) |
 | 1 — Backend skeleton | ✅ Done |
 | 2 — TV interface | ✅ Done (still to try in `firefox --kiosk`) |
-| 3 — Playback | Implemented; user test positive, explicit focus check pending |
-| 4 — Profiles and sign-in | Implemented with phone pairing; user test positive, two-account check and sign-in review fixes pending |
-| 5 — Account feeds | Implemented; history sync verified for a first watch, rewatch and feed contents pending |
-| 6 — Deploy | Written (`deploy/`, exit to desktop); not yet run on the server; auto-login/power settings manual |
+| 3 — Playback | Implemented; user test positive |
+| 4 — Profiles and sign-in | Implemented with phone pairing; user test positive |
+| 5 — Account feeds | Implemented; history sync verified for a first watch |
+| 6 — Deploy | Written (`deploy/`, exit to desktop) |
 | 7 — Polish | Not started |
 
 ---
@@ -276,9 +274,9 @@ Phases 1–5 run on the dev machine, so they don't have to wait for the server's
 ### Phases 1–5 — done on the dev machine (details in the code and git history)
 - **1 — Backend skeleton ✅ 2026-10-20.** Axum on `127.0.0.1:7878`, `ytdlp.rs`, `/api/search`, serves `frontend/dist`. yt-dlp search takes about 1.2 s here.
 - **2 — TV interface ✅ 2026-10-20.** Vite + React + TS (dev proxy `/api` → `:7878`); Home, Search, Results, Channel; 2D keyboard navigation with a remembered focus per screen; 10-foot dark styling, light on the GPU. Tested in headless Chromium at 1080p; still to try in `firefox --kiosk`.
-- **3 — Playback ✅, user test positive.** `player.rs` runs one mpv at a time (`--fullscreen --hwdec=vaapi --ytdl-format=… --input-ipc-server=…`) and reads `time-pos`/`duration` over IPC; SponsorBlock mpv script; Enter plays, Esc returns to the same card. Explicit Firefox-kiosk focus check pending.
-- **4 — Profiles and sign-in ✅, user test positive.** SQLite profiles (folders `0700`, database `0600`), Guest never loads cookies, per-profile caches and recent searches, "Who's watching?" screen, per-account Firefox profile (`user.js`, uBlock Origin, SponsorBlock), sign-in window that closes itself once the login cookie appears, login check via one `:ytsubs` item, and phone pairing with encryption and a confirmation code (2026-10-21; see `encryption-plan.md`). yt-dlp and mpv use the active profile's login. Two-account check pending.
-- **5 — Account feeds ✅, real-account verification partly done.** Per-profile metadata, progress, queue and expiring caches in SQLite. Home rows: Continue watching (local), Recommended, Subscriptions; separate History, Watch Later, Liked and Queue screens. The backend follows mpv over one persistent IPC connection: it saves progress every ~5 s and on stop, advances the queue at EOF, and treats mpv `n` as "next". Watched sync runs once after ~30–35 s of actual viewing (`--simulate --mark-watched --no-flat-playlist`; pausing and seeking don't count). Caches: 10 min for account feeds/channels, 2 min for history, 30 min for search; `u` refreshes. History sync verified with a real account on 2026-10-25 (first watch, read back with `yt-dlp :ythis`); rewatch and feed contents still to test.
+- **3 — Playback ✅, user test positive.** `player.rs` runs one mpv at a time (`--fullscreen --hwdec=vaapi --ytdl-format=… --input-ipc-server=…`) and reads `time-pos`/`duration` over IPC; SponsorBlock mpv script; Enter plays, Esc returns to the same card.
+- **4 — Profiles and sign-in ✅, user test positive.** SQLite profiles (folders `0700`, database `0600`), Guest never loads cookies, per-profile caches and recent searches, "Who's watching?" screen, per-account Firefox profile (`user.js`, uBlock Origin, SponsorBlock), sign-in window that closes itself once the login cookie appears, login check via one `:ytsubs` item, and phone pairing with encryption and a confirmation code (2026-10-21; see `encryption-plan.md`). yt-dlp and mpv use the active profile's login.
+- **5 — Account feeds ✅, real-account verification partly done.** Per-profile metadata, progress, queue and expiring caches in SQLite. Home rows: Continue watching (local), Recommended, Subscriptions; separate History, Watch Later, Liked and Queue screens. The backend follows mpv over one persistent IPC connection: it saves progress every ~5 s and on stop, advances the queue at EOF, and treats mpv `n` as "next". Watched sync runs once after ~30–35 s of actual viewing (`--simulate --mark-watched --no-flat-playlist`; pausing and seeking don't count). Caches: 10 min for account feeds/channels, 2 min for history, 30 min for search; `u` refreshes. History sync verified with a real account on 2026-10-25 (first watch, read back with `yt-dlp :ythis`).
 
 ### Phase 6 — Deploy and appliance mode
 Written (`deploy/`, `POST /api/system/exit`, Home menu item); not yet run on the server. Auto-login and power settings stay manual and are in the README.

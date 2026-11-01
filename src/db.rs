@@ -17,6 +17,15 @@ pub struct Profile {
     pub subtitles: Option<String>,
 }
 
+/// One thing the user told "For You" to learn from: a theme, a video or a channel.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Seed {
+    pub id: i64,
+    pub kind: String,
+    pub value: String,
+    pub label: String,
+}
+
 #[derive(Clone)]
 pub struct Database(Arc<Mutex<Connection>>);
 
@@ -50,6 +59,14 @@ impl Database {
                 profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
                 cache_key TEXT NOT NULL, json TEXT NOT NULL, expires_at INTEGER NOT NULL,
                 PRIMARY KEY(profile_id, cache_key)
+            );
+            CREATE TABLE IF NOT EXISTS seeds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL CHECK (kind IN ('theme','video','channel')),
+                value TEXT NOT NULL, label TEXT NOT NULL,
+                created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                UNIQUE(profile_id, kind, value)
             );
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS remote_devices (
@@ -360,6 +377,65 @@ impl Database {
         .await
     }
 
+    pub async fn seeds(&self, profile: &str) -> Result<Vec<Seed>> {
+        let profile = profile.to_owned();
+        self.with(move |db| {
+            let mut statement = db.prepare(
+                "SELECT id,kind,value,label FROM seeds WHERE profile_id=?1 ORDER BY id",
+            )?;
+            Ok(statement
+                .query_map([profile], |r| {
+                    Ok(Seed { id: r.get(0)?, kind: r.get(1)?, value: r.get(2)?, label: r.get(3)? })
+                })?
+                .collect::<rusqlite::Result<_>>()?)
+        })
+        .await
+    }
+
+    /// Adds a seed; adding the same one again changes nothing.
+    pub async fn add_seed(&self, profile: &str, kind: &str, value: &str, label: &str) -> Result<()> {
+        let (profile, kind, value, label) =
+            (profile.to_owned(), kind.to_owned(), value.to_owned(), label.to_owned());
+        self.with(move |db| {
+            db.execute(
+                "INSERT OR IGNORE INTO seeds(profile_id,kind,value,label) VALUES (?1,?2,?3,?4)",
+                params![profile, kind, value, label],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn remove_seed(&self, profile: &str, id: i64) -> Result<()> {
+        let profile = profile.to_owned();
+        self.with(move |db| {
+            db.execute("DELETE FROM seeds WHERE profile_id=?1 AND id=?2", params![profile, id])?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Every video this profile has started watching; "For You" leaves these out.
+    pub async fn watched_ids(&self, profile: &str) -> Result<std::collections::HashSet<String>> {
+        let profile = profile.to_owned();
+        self.with(move |db| {
+            let mut statement = db.prepare("SELECT video_id FROM progress WHERE profile_id=?1")?;
+            Ok(statement
+                .query_map([profile], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<_>>()?)
+        })
+        .await
+    }
+
+    pub async fn cache_delete(&self, profile: &str, key: &str) -> Result<()> {
+        let (profile, key) = (profile.to_owned(), key.to_owned());
+        self.with(move |db| {
+            db.execute("DELETE FROM feed_cache WHERE profile_id=?1 AND cache_key=?2", params![profile, key])?;
+            Ok(())
+        })
+        .await
+    }
+
     pub async fn dequeue(&self, profile: &str, id: Option<&str>) -> Result<()> {
         let profile = profile.to_owned();
         let id = id.map(str::to_owned);
@@ -493,5 +569,22 @@ mod tests {
         assert_eq!(db.list().await.unwrap().len(), 1);
         drop(db);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn seeds_are_per_profile_unique_and_cascade() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        let alice = db.create("Alice", "#aabbcc").await.unwrap();
+        let bob = db.create("Bob", "#aabbcc").await.unwrap();
+        db.add_seed(&alice.id, "theme", "retro computing", "retro computing").await.unwrap();
+        db.add_seed(&alice.id, "theme", "retro computing", "retro computing").await.unwrap();
+        db.add_seed(&alice.id, "video", "aqz-KE-bpKQ", "aqz-KE-bpKQ").await.unwrap();
+        let seeds = db.seeds(&alice.id).await.unwrap();
+        assert_eq!(seeds.len(), 2);
+        assert!(db.seeds(&bob.id).await.unwrap().is_empty());
+        db.remove_seed(&bob.id, seeds[0].id).await.unwrap();
+        assert_eq!(db.seeds(&alice.id).await.unwrap().len(), 2);
+        db.remove_seed(&alice.id, seeds[0].id).await.unwrap();
+        assert_eq!(db.seeds(&alice.id).await.unwrap().len(), 1);
     }
 }

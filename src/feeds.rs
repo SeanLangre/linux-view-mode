@@ -1,6 +1,7 @@
 //! Persistent per-profile cache. The account gate also coalesces concurrent requests.
 use crate::{
     db::Database,
+    discover,
     profiles::Account,
     ytdlp::{self, Channel, Video},
 };
@@ -110,6 +111,59 @@ impl Feeds {
             .await?;
         Ok(videos)
     }
+    /// Cache key of a profile's ranked "For You" list.
+    pub const FORYOU_KEY: &'static str = "foryou:all";
+
+    /// The profile's own recommendations, built from its seeds. `guest` runs every request, so
+    /// no account cookies are used; its caches are shared between profiles.
+    pub async fn foryou(
+        &self,
+        profile_id: &str,
+        guest: &Account,
+        page: u32,
+        refresh: bool,
+    ) -> Result<Vec<Video>> {
+        let all = self.foryou_all(profile_id, guest, refresh).await?;
+        let size = ytdlp::PAGE_SIZE as usize;
+        Ok(all.into_iter().skip(page as usize * size).take(size).collect())
+    }
+
+    async fn foryou_all(&self, profile_id: &str, guest: &Account, refresh: bool) -> Result<Vec<Video>> {
+        if !refresh && let Some(json) = self.0.cache_get(profile_id, Self::FORYOU_KEY).await? {
+            return Ok(serde_json::from_str(&json)?);
+        }
+        let seeds = self.0.seeds(profile_id).await?;
+        let (themes, channels) = discover::pick_sources(&seeds);
+        let mut sources = Vec::new();
+        let mut failed = 0;
+        for seed in themes {
+            match self.search(guest, &seed.value, discover::THEME_LIMIT, refresh).await {
+                Ok(videos) => sources.push(videos),
+                Err(err) => { failed += 1; tracing::warn!("For You theme search failed: {err:#}"); }
+            }
+        }
+        for seed in channels {
+            if !ytdlp::is_channel_id(&seed.value) { continue; }
+            match self.channel(guest, &seed.value, 0, refresh).await {
+                Ok(channel) => sources.push(channel.videos.into_iter().take(discover::CHANNEL_LIMIT).collect()),
+                Err(err) => { failed += 1; tracing::warn!("For You channel failed: {err:#}"); }
+            }
+        }
+        // Do not cache a list that is empty only because every request failed.
+        if sources.is_empty() && failed > 0 {
+            anyhow::bail!("every discovery request failed");
+        }
+        let known = self.0.watched_ids(profile_id).await?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        let videos = discover::rank(sources, &known, now);
+        self.0
+            .cache_put(profile_id, Self::FORYOU_KEY, serde_json::to_string(&videos)?, 600, videos.clone())
+            .await?;
+        Ok(videos)
+    }
+
     pub fn prefetch(&self, account: Account) {
         if account.cookies().is_none() {
             return;
