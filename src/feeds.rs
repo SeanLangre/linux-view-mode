@@ -6,7 +6,7 @@ use crate::{
     ytdlp::{self, Channel, Video},
 };
 use anyhow::{Context, Result};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone)]
 pub struct Feeds(pub Database);
@@ -194,6 +194,8 @@ impl Feeds {
         if sources.is_empty() && failed > 0 {
             anyhow::bail!("every discovery request failed");
         }
+        let seed_channels: HashSet<String> = seeds.iter().filter(|s| s.kind == "channel").map(|s| s.value.clone()).collect();
+        self.fill_view_counts(guest, &mut sources, &seed_channels).await;
         let mut known = self.0.watched_ids(profile_id).await?;
         let (dismissed, dismissed_channels) = self.0.dismissed(profile_id).await?;
         known.extend(dismissed);
@@ -201,7 +203,6 @@ impl Feeds {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
-        let seed_channels = seeds.iter().filter(|s| s.kind == "channel").map(|s| s.value.clone()).collect();
         let excluded: Vec<String> = seeds.iter().filter(|s| s.kind == "exclude").map(|s| s.value.clone()).collect();
         let videos = discover::rank(sources, &known, &dismissed_channels, &seed_channels, &excluded, now);
         // The reason belongs to this list only, so the shared video table keeps none.
@@ -210,6 +211,44 @@ impl Feeds {
             .cache_put(profile_id, Self::FORYOU_KEY, serde_json::to_string(&videos)?, 600, stored)
             .await?;
         Ok(videos)
+    }
+
+    /// Videos from channels that are not seeds need a view count to pass the minimum, but channel
+    /// pages sometimes leave it out. Looks up a few of the missing ones (remembered for a week).
+    async fn fill_view_counts(&self, guest: &Account, sources: &mut [discover::Source], seed_channels: &HashSet<String>) {
+        let known: HashSet<String> = sources.iter().flat_map(|s| &s.videos).filter(|v| v.view_count.is_some()).map(|v| v.id.clone()).collect();
+        let mut missing: Vec<String> = Vec::new();
+        for video in sources.iter().flat_map(|s| &s.videos) {
+            let seeded = video.channel_id.as_ref().is_some_and(|c| seed_channels.contains(c));
+            if video.view_count.is_none() && !seeded && !known.contains(&video.id) && !missing.contains(&video.id) {
+                missing.push(video.id.clone());
+            }
+        }
+        let mut counts: HashMap<String, u64> = HashMap::new();
+        let mut looked_up = 0;
+        for id in missing {
+            let key = format!("views:{id}");
+            if let Ok(Some(json)) = self.0.cache_get(&guest.profile.id, &key).await {
+                if let Ok(Some(count)) = serde_json::from_str::<Option<u64>>(&json) { counts.insert(id, count); }
+                continue;
+            }
+            if looked_up >= discover::MAX_VIEW_LOOKUPS { continue; }
+            looked_up += 1;
+            let found = {
+                let _request = guest.gate.lock().await;
+                ytdlp::view_count(&id).await
+            };
+            match found {
+                Ok(count) => {
+                    let _ = self.0.cache_put(&guest.profile.id, &key, serde_json::to_string(&count).unwrap_or_default(), 7 * 86_400, vec![]).await;
+                    if let Some(count) = count { counts.insert(id, count); }
+                }
+                Err(err) => tracing::debug!("For You view count lookup failed: {err:#}"),
+            }
+        }
+        for video in sources.iter_mut().flat_map(|s| s.videos.iter_mut()) {
+            if video.view_count.is_none() { video.view_count = counts.get(&video.id).copied(); }
+        }
     }
 
     pub fn prefetch(&self, account: Account) {

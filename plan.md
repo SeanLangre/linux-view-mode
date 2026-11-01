@@ -12,7 +12,8 @@ How to run the code is in `README.md`; the working checklist is `TODO.md`.
 | 3 — Playback | Implemented; user test positive |
 | 4 — Profiles and sign-in | Implemented with phone pairing; user test positive |
 | 5 — Account feeds | Implemented; history sync verified for a first watch |
-| For You (own recommendations) | Implemented, see `special-for-you.md`; not tried on screen |
+| For You (own recommendations) | Implemented (seeds, exclusions, blended searches, 50/50 new channels, 100k-view minimum, History button, watched mark), see `special-for-you.md`; not tried on screen |
+| Playback in the CouchTube window | Implemented 2026-11-01 (timeline, subtitles, remote commands, mpv fallback); user test positive |
 | 6 — Deploy | Written (`deploy/`, exit to desktop) |
 | 7 — Polish | Not started |
 
@@ -47,7 +48,7 @@ How to run the code is in `README.md`; the working checklist is `TODO.md`.
 | Browser | **Firefox** (not Chromium) | Runs the full **uBlock Origin**; Chromium no longer supports it. yt-dlp reads Firefox cookies directly, with no keyring setup |
 | Backend | **Rust + Axum** on `127.0.0.1` | Handles accounts, yt-dlp, starting mpv, storage |
 | Accounts | **Several Google accounts**, each signed in once in its **own Firefox profile**; yt-dlp reuses that login (`--cookies-from-browser firefox:<dir>`) | Gives real recommendations, subscriptions, history, Watch Later and Liked videos for each person |
-| Playback | **mpv** (uses yt-dlp internally) with the active account's login | **No ads** (it gets the video streams directly), no embed restrictions, native keyboard controls |
+| Playback | Default (since 2026-11-01): YouTube's embedded player on `frontend/public/watch.html`, shown by the kiosk window, reporting to `POST /api/player/report`. **mpv** (uses yt-dlp internally, HLS first) with the active account's login is the fallback and `COUCHTUBE_PLAYER=mpv` | mpv: **no ads**, no embed restrictions, native keyboard controls. The embed is not signed in, so it needs uBlock Origin for ads, and some videos refuse to embed (then mpv plays them) |
 | Ad blocking | Built in for playback (mpv); **uBlock Origin** + SponsorBlock in Firefox for the YouTube TV fallback; SponsorBlock script in mpv | No YouTube Premium, so every path is ad-free |
 | Quality | Capped at **1080p**: `bv*[height<=1080]+ba/b[height<=1080]` | Your choice. Iris Xe decodes every codec YouTube uses (AV1/VP9/H.264) in hardware, so the CPU stays free |
 | History sync | Backend runs `yt-dlp --mark-watched` once a video has played for ~30 s | Videos you watch show up in your YouTube history and stop being recommended |
@@ -63,7 +64,7 @@ How to run the code is in `README.md`; the working checklist is `TODO.md`.
 - **Chromium**: only supports uBlock Origin Lite, which is weak against YouTube ads; its cookies also need a keyring workaround.
 - **YouTube Data API + Google sign-in**: no recommendations or watch history.
 - **youtube.com/tv as the main UI**: not a custom interface. Kept as a **fallback tile** (Phase 7) in Firefox with uBlock Origin, for when yt-dlp breaks or you need to like or subscribe.
-- **iframe embed for playback**: captures keyboard focus, so Esc stops working; some videos won't play embedded; shows ads.
+- **iframe embed for playback**: captures keyboard focus, so Esc stops working; some videos won't play embedded; shows ads. *Revisited 2026-11-01:* mpv's direct streams started failing with HTTP 403, so playback now defaults to YouTube's embedded player inside the existing kiosk window (a page that keeps keyboard focus and mirrors mpv's keys and status), with mpv as the automatic fallback. See README.
 
 ---
 
@@ -231,6 +232,8 @@ React 19 + TypeScript + Vite 8, tested with vitest, linted with oxlint. No UI li
 | `n` | Next in queue |
 | `9` / `0`, `m` | Volume, mute |
 | `i` | Title and progress overlay |
+
+The embedded player page (`watch.html`) accepts the same keys, plus `c` to switch subtitles on and off.
 
 ---
 

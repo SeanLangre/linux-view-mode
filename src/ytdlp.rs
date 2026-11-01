@@ -125,6 +125,21 @@ pub async fn mark_watched(id: &str, firefox: &Path) -> Result<()> {
     Ok(())
 }
 
+/// View count of one video (no download); `None` when YouTube gives none, as for some live streams.
+pub async fn view_count(id: &str) -> Result<Option<u64>> {
+    if !is_video_id(id) {
+        bail!("invalid video id");
+    }
+    let json = run(
+        &format!("https://www.youtube.com/watch?v={id}"),
+        &["--no-flat-playlist", "--no-playlist", "--simulate"],
+        None,
+    )
+    .await?;
+    let info: serde_json::Value = serde_json::from_slice(&json).context("unexpected yt-dlp output")?;
+    Ok(info["view_count"].as_u64())
+}
+
 /// Title and channel of one video (no download), used to turn a pasted video into a search.
 pub async fn video_info(id: &str) -> Result<(String, Option<String>)> {
     if !is_video_id(id) {

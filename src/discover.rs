@@ -28,7 +28,12 @@ const MAX_PENALTY: f64 = 1.5;
 const LONG_BOOST: f64 = 0.6;
 /// Share of the list kept for videos from channels that are not seed channels, so the list
 /// is not only the seeded channels' own uploads.
-const NEW_CHANNEL_SHARE: f64 = 0.3;
+const NEW_CHANNEL_SHARE: f64 = 0.5;
+/// Most missing view counts looked up (one yt-dlp request each) per refresh.
+pub const MAX_VIEW_LOOKUPS: usize = 8;
+/// Videos from channels that are not seeds need at least this many views (a video whose view count
+/// is unknown, as for some live streams and premieres, does not pass). Seed channels are exempt.
+const MIN_NEW_CHANNEL_VIEWS: u64 = 100_000;
 const SHORT_SECS: f64 = 300.0;
 const LONG_SECS: f64 = 2400.0;
 
@@ -69,7 +74,7 @@ pub struct Source {
 /// A video scores more the higher it sits in a source and the more sources list it; videos
 /// uploaded in the last year get 0.8 points extra, fading to half at two years and nothing at three, and videos from channels the
 /// user dismissed things from lose points. Videos in `known` are dropped. Each video's
-/// `reason` names the sources that found it. About 30% of the list is then reserved for the
+/// `reason` names the sources that found it. Half of the list is then reserved for the
 /// best videos from channels outside `seed_channels` (the channels the user already follows as seeds).
 pub fn rank(
     sources: Vec<Source>,
@@ -88,11 +93,15 @@ pub fn rank(
                 continue;
             }
             let points = 1.0 / (1.0 + position as f64 * 0.15);
+            let (views, timestamp) = (video.view_count, video.timestamp);
             let entry = scored.entry(video.id.clone()).or_insert_with(|| {
                 order += 1;
                 Entry { score: 0.0, order, reasons: vec![], video }
             });
             entry.score += points;
+            // Channel pages sometimes leave out the view count or date that a search shows.
+            if entry.video.view_count.is_none() { entry.video.view_count = views; }
+            if entry.video.timestamp.is_none() { entry.video.timestamp = timestamp; }
             if !entry.reasons.contains(&source.label) {
                 entry.reasons.push(source.label.clone());
             }
@@ -113,6 +122,7 @@ pub fn rank(
     let (seeded, new): (Vec<_>, Vec<_>) = ranked.into_iter().map(|entry| entry.video).partition(|video| {
         video.channel_id.as_ref().is_some_and(|channel| seed_channels.contains(channel))
     });
+    let new = new.into_iter().filter(|v| v.view_count.is_some_and(|views| views >= MIN_NEW_CHANNEL_VIEWS)).collect();
     mix(seeded, new, NEW_CHANNEL_SHARE)
 }
 
@@ -146,8 +156,15 @@ fn is_excluded(video: &Video, excluded: &[String]) -> bool {
     if excluded.is_empty() {
         return false;
     }
-    let text = [stems(&video.title), stems(video.channel.as_deref().unwrap_or(""))];
+    let channel = video.channel.as_deref().unwrap_or("");
+    let text = [stems(&video.title), stems(channel)];
+    // Channel names run words together ("kidstv123"), so there a word counts inside a longer one.
+    let squashed = channel.to_lowercase();
     excluded.iter().any(|term| {
+        let typed = term.trim().to_lowercase();
+        if !typed.contains(char::is_whitespace) && typed.chars().count() >= 4 && squashed.contains(&typed) {
+            return true;
+        }
         let term = stems(term);
         let related = RELATED
             .iter()
@@ -207,6 +224,7 @@ mod tests {
     fn video(id: &str, timestamp: Option<i64>) -> Video {
         let mut video = Video::placeholder(id);
         video.timestamp = timestamp;
+        video.view_count = Some(1_000_000);
         video
     }
     fn source(label: &str, videos: Vec<Video>) -> Source {
@@ -277,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn a_third_of_the_list_comes_from_channels_that_are_not_seeds() {
+    fn half_of_the_list_comes_from_channels_that_are_not_seeds() {
         let from = |id: &str, channel: &str| {
             let mut v = video(id, None);
             v.channel_id = Some(channel.into());
@@ -288,7 +306,7 @@ mod tests {
         let seeds = HashSet::from(["UCseed".to_string()]);
         let ranked = rank(vec![source("s", found)], &HashSet::new(), &HashMap::new(), &seeds, &[], NOW);
         let new_in_top_10 = ranked.iter().take(10).filter(|v| v.channel_id.as_deref() == Some("UCnew")).count();
-        assert_eq!(new_in_top_10, 3);
+        assert_eq!(new_in_top_10, 5);
         // With no new-channel videos at all, the seeded ones still fill the list.
         let only = vec![from("aaaaaaaaaaa", "UCseed"), from("bbbbbbbbbbb", "UCseed")];
         assert_eq!(rank(vec![source("s", only)], &HashSet::new(), &HashMap::new(), &seeds, &[], NOW).len(), 2);
@@ -337,6 +355,19 @@ mod tests {
         let ranked = rank(vec![source("s", vec![phonk, documentary.clone()])], &HashSet::new(), &HashMap::new(), &HashSet::new(), &["music".to_string()], NOW);
         assert_eq!(ids(&ranked), ["ccccccccccc"]);
         assert_eq!(rank_excluding("haunting"), ["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+        // A channel name with the word run together is caught too, a title only on whole words.
+        let mut tv = video("eeeeeeeeeee", None);
+        tv.title = "spooky spooky halloween song".into();
+        tv.channel = Some("kidstv123".into());
+        let mut plain = video("fffffffffff", None);
+        plain.title = "A day at the museum".into();
+        // Counts the videos that remain after excluding `term`.
+        let hide = |term: &str, videos: Vec<Video>| {
+            ids(&rank(vec![source("s", videos)], &HashSet::new(), &HashMap::new(), &HashSet::new(), &[term.to_string()], NOW)).len()
+        };
+        assert_eq!(hide("kids", vec![tv.clone(), plain.clone()]), 1);
+        assert_eq!(hide("music", vec![tv.clone(), plain.clone()]), 1);
+        assert_eq!(hide("muse", vec![plain.clone()]), 1);
     }
 
     #[test]
@@ -354,6 +385,39 @@ mod tests {
         assert!(first.iter().all(|(label, _)| !label.contains("T5") && !label.contains("T6")));
         assert_ne!(blends(&themes, 1), first);
         assert_eq!(blends(&themes, 6), first);
+    }
+
+    #[test]
+    fn videos_from_new_channels_need_100k_views_but_seed_channels_do_not() {
+        let from = |id: &str, channel: &str, views: Option<u64>| {
+            let mut v = video(id, None);
+            v.channel_id = Some(channel.into());
+            v.view_count = views;
+            v
+        };
+        let found = vec![
+            from("aaaaaaaaaaa", "UCnew", Some(99_999)),
+            from("bbbbbbbbbbb", "UCnew", Some(100_000)),
+            from("ccccccccccc", "UCnew", None),
+            from("ddddddddddd", "UCseed", Some(12)),
+            from("eeeeeeeeeee", "UCseed", None),
+        ];
+        let seeds = HashSet::from(["UCseed".to_string()]);
+        let ranked = rank(vec![source("s", found)], &HashSet::new(), &HashMap::new(), &seeds, &[], NOW);
+        let mut kept = ids(&ranked);
+        kept.sort();
+        assert_eq!(kept, ["bbbbbbbbbbb", "ddddddddddd", "eeeeeeeeeee"]);
+    }
+
+    #[test]
+    fn a_missing_view_count_is_filled_in_from_another_source() {
+        let mut channel_page = video("aaaaaaaaaaa", None);
+        channel_page.view_count = None;
+        let mut search = video("aaaaaaaaaaa", Some(NOW - 86_400));
+        search.view_count = Some(1_613_240);
+        let ranked = rank_plain(vec![source("channel", vec![channel_page]), source("search", vec![search])], &HashSet::new());
+        assert_eq!(ranked.len(), 1);
+        assert_eq!((ranked[0].view_count, ranked[0].timestamp), (Some(1_613_240), Some(NOW - 86_400)));
     }
 
     #[test]
