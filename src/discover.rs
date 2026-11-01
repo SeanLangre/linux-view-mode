@@ -116,19 +116,46 @@ pub fn rank(
     mix(seeded, new, NEW_CHANNEL_SHARE)
 }
 
-/// Whether the title or channel name contains an excluded word or phrase, as whole words
-/// and ignoring case ("music" does not match "museum").
+/// Words that usually come with an excluded topic, since a title rarely says "kids" outright.
+const RELATED: &[(&str, &[&str])] = &[
+    ("kid", &["child", "children", "toddler", "nursery", "preschool", "cartoon", "sing along", "singalong"]),
+    (
+        "music",
+        &[
+            "song", "lyrics", "lyric", "remix", "album", "official audio", "official music video", "audio",
+            "lofi", "lo-fi", "phonk", "nightcore", "sped up", "slowed", "instrumental", "type beat", "mashup",
+            "edm", "synthwave", "vaporwave", "soundtrack", "ost", "playlist", "mix",
+        ],
+    ),
+];
+
+/// Lowercase words, with a trailing plural "s" removed so "kids" and "kid" are the same word.
+fn stems(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let w = w.to_lowercase();
+            if w.chars().count() > 3 && w.ends_with('s') && !w.ends_with("ss") { w[..w.len() - 1].to_string() } else { w }
+        })
+        .collect()
+}
+
+/// Whether the title or channel name contains an excluded word or phrase (whole words, any case,
+/// singular or plural), or a word that usually comes with it ("not kids" also hides "sing along").
 fn is_excluded(video: &Video, excluded: &[String]) -> bool {
     if excluded.is_empty() {
         return false;
     }
-    let words = |text: &str| -> Vec<String> {
-        text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect()
-    };
-    let text = [words(&video.title), words(video.channel.as_deref().unwrap_or(""))];
+    let text = [stems(&video.title), stems(video.channel.as_deref().unwrap_or(""))];
     excluded.iter().any(|term| {
-        let term = words(term);
-        !term.is_empty() && text.iter().any(|t| t.windows(term.len()).any(|w| w == term.as_slice()))
+        let term = stems(term);
+        let related = RELATED
+            .iter()
+            .filter(|(key, _)| term.len() == 1 && term[0] == *key)
+            .flat_map(|(_, words)| words.iter().map(|w| stems(w)));
+        std::iter::once(term.clone()).chain(related).any(|phrase| {
+            !phrase.is_empty() && text.iter().any(|t| t.windows(phrase.len()).any(|w| w == phrase.as_slice()))
+        })
     })
 }
 
@@ -287,6 +314,29 @@ mod tests {
         assert_eq!(rank_excluding(&["music"]), ["bbbbbbbbbbb", "ddddddddddd"]);
         assert_eq!(rank_excluding(&["video essay"]), ["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"]);
         assert_eq!(rank_excluding(&[]).len(), 4);
+    }
+
+    #[test]
+    fn an_excluded_topic_also_hides_words_that_come_with_it() {
+        let mut ninimo = video("aaaaaaaaaaa", None);
+        ninimo.title = "BOO! Sing Along with Spooky Ninimo".into();
+        let mut plural = video("bbbbbbbbbbb", None);
+        plural.title = "Best Kids Songs".into();
+        let mut documentary = video("ccccccccccc", None);
+        documentary.title = "The Haunting of a Hotel".into();
+        let rank_excluding = |term: &str| {
+            let all = vec![ninimo.clone(), plural.clone(), documentary.clone()];
+            let ranked = rank(vec![source("s", all)], &HashSet::new(), &HashMap::new(), &HashSet::new(), &[term.to_string()], NOW);
+            ranked.iter().map(|v| v.id.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(rank_excluding("kids"), ["ccccccccccc"]);
+        assert_eq!(rank_excluding("kid"), ["ccccccccccc"]);
+        assert_eq!(rank_excluding("music"), ["aaaaaaaaaaa", "ccccccccccc"]);
+        let mut phonk = video("ddddddddddd", None);
+        phonk.title = "Spooky (phonk)".into();
+        let ranked = rank(vec![source("s", vec![phonk, documentary.clone()])], &HashSet::new(), &HashMap::new(), &HashSet::new(), &["music".to_string()], NOW);
+        assert_eq!(ids(&ranked), ["ccccccccccc"]);
+        assert_eq!(rank_excluding("haunting"), ["aaaaaaaaaaa", "bbbbbbbbbbb"]);
     }
 
     #[test]
