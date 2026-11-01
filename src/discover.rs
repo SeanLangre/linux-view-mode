@@ -13,11 +13,16 @@ pub const MAX_VIDEOS: usize = 4;
 /// Videos taken from each search and each channel.
 pub const THEME_LIMIT: u32 = 12;
 pub const CHANNEL_LIMIT: usize = 8;
-/// Videos newer than this get a recency boost.
-const FRESH_DAYS: f64 = 30.0;
+/// Recent videos are preferred: full boost up to a year old, half at two years, none from three.
+const RECENT_BOOST: f64 = 0.8;
+const YEAR_DAYS: f64 = 365.0;
 /// Each dismissed video of a channel lowers that channel's other videos by this much, up to the cap.
 const DISMISS_PENALTY: f64 = 0.5;
 const MAX_PENALTY: f64 = 1.5;
+/// Longer videos are preferred: no boost under 5 minutes, growing to `LONG_BOOST` at 40 minutes.
+const LONG_BOOST: f64 = 0.6;
+const SHORT_SECS: f64 = 300.0;
+const LONG_SECS: f64 = 2400.0;
 
 /// The seeds to query, newest first within each kind: themes, channels, videos.
 pub fn pick_sources(seeds: &[Seed]) -> (Vec<&Seed>, Vec<&Seed>, Vec<&Seed>) {
@@ -36,7 +41,7 @@ pub struct Source {
 /// Merges the result lists of several sources into one ranked list.
 ///
 /// A video scores more the higher it sits in a source and the more sources list it; videos
-/// uploaded in the last 30 days get up to half a point extra, and videos from channels the
+/// uploaded in the last year get 0.8 points extra, fading to half at two years and nothing at three, and videos from channels the
 /// user dismissed things from lose points. Videos in `known` are dropped. Each video's
 /// `reason` names the sources that found it.
 pub fn rank(
@@ -70,7 +75,7 @@ pub fn rank(
             let penalty = entry.video.channel_id.as_ref()
                 .and_then(|channel| dismissed_channels.get(channel))
                 .map_or(0.0, |count| (*count as f64 * DISMISS_PENALTY).min(MAX_PENALTY));
-            entry.score += recency(entry.video.timestamp, now) - penalty;
+            entry.score += recency(entry.video.timestamp, now) + length_boost(entry.video.duration) - penalty;
             entry.video.reason = Some(entry.reasons.iter().take(2).cloned().collect::<Vec<_>>().join(" + "));
             entry
         })
@@ -81,8 +86,14 @@ pub fn rank(
 
 fn recency(timestamp: Option<i64>, now: i64) -> f64 {
     let Some(timestamp) = timestamp else { return 0.0 };
-    let age_days = (now - timestamp) as f64 / 86_400.0;
-    0.5 * (1.0 - age_days / FRESH_DAYS).clamp(0.0, 1.0)
+    let age_years = ((now - timestamp) as f64 / 86_400.0 / YEAR_DAYS).max(0.0);
+    let share = if age_years <= 1.0 { 1.0 } else { 1.0 - (age_years - 1.0) * 0.5 };
+    RECENT_BOOST * share.clamp(0.0, 1.0)
+}
+
+fn length_boost(duration: Option<f64>) -> f64 {
+    let Some(seconds) = duration else { return 0.0 };
+    LONG_BOOST * ((seconds - SHORT_SECS) / (LONG_SECS - SHORT_SECS)).clamp(0.0, 1.0)
 }
 
 /// A search query for "videos like this one": the title without bracketed tags and extra spaces.
@@ -138,12 +149,30 @@ mod tests {
     }
 
     #[test]
-    fn newer_uploads_win_ties_and_old_ones_get_no_boost() {
-        let old = source("x", vec![video("aaaaaaaaaaa", Some(NOW - 400 * 86_400))]);
+    fn recent_uploads_win_ties_and_old_ones_get_no_boost() {
+        let old = source("x", vec![video("aaaaaaaaaaa", Some(NOW - 4 * 365 * 86_400))]);
         let fresh = source("y", vec![video("bbbbbbbbbbb", Some(NOW - 86_400))]);
         assert_eq!(ids(&rank_plain(vec![old, fresh], &HashSet::new())), ["bbbbbbbbbbb", "aaaaaaaaaaa"]);
-        assert_eq!(recency(Some(NOW - 400 * 86_400), NOW), 0.0);
+        let at = |years: f64| recency(Some(NOW - (years * 365.0 * 86_400.0) as i64), NOW);
+        assert_eq!(at(0.1), RECENT_BOOST);
+        assert_eq!(at(1.0), RECENT_BOOST);
+        assert!((at(2.0) - RECENT_BOOST / 2.0).abs() < 1e-9);
+        assert_eq!(at(3.0), 0.0);
+        assert_eq!(at(6.0), 0.0);
         assert_eq!(recency(None, NOW), 0.0);
+    }
+
+    #[test]
+    fn longer_videos_rank_above_short_ones() {
+        let mut short = video("aaaaaaaaaaa", None);
+        short.duration = Some(120.0);
+        let mut long = video("bbbbbbbbbbb", None);
+        long.duration = Some(3000.0);
+        let ranked = rank_plain(vec![source("s", vec![short, long])], &HashSet::new());
+        assert_eq!(ids(&ranked), ["bbbbbbbbbbb", "aaaaaaaaaaa"]);
+        assert_eq!(length_boost(Some(60.0)), 0.0);
+        assert_eq!(length_boost(None), 0.0);
+        assert_eq!(length_boost(Some(99_999.0)), LONG_BOOST);
     }
 
     #[test]
