@@ -43,7 +43,7 @@ const languageName = (code: string | null) =>
 /** Menu entries that need a signed-in YouTube account. */
 const ACCOUNT_ACTIONS = ['recommended', 'subscriptions', 'watchlater', 'liked']
 const FEED_NAMES: Record<api.FeedKind, string> = {
-  foryou: 'For You', continue: 'Continue watching', recommended: 'Recommended', subscriptions: 'Subscriptions',
+  foryou: 'For You', continue: 'Continue watching', local: 'History', recommended: 'Recommended', subscriptions: 'Subscriptions',
   history: 'History', watchlater: 'Watch later', liked: 'Liked videos',
 }
 
@@ -169,6 +169,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
       }
       case 'foryou':
         return [{ kind: 'seed-input' },
+          { kind: 'menu', items: [{ label: 'History', action: 'local' }] },
           ...(seeds.length > 0 ? [{ kind: 'chips', title: 'Your seeds', items: seeds.map((seed) => `${seed.kind === 'theme' ? 'Theme' : seed.kind === 'video' ? 'Video' : 'Channel'}: ${seed.label}`) } as const] : []),
           ...data.rows]
       case 'queue':

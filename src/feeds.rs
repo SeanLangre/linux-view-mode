@@ -73,11 +73,15 @@ impl Feeds {
         refresh: bool,
     ) -> Result<Vec<Video>> {
         // Local lists (continue watching, guest history) are not paged.
-        if page > 0 && (kind == "continue" || account.cookies().is_none()) {
+        if page > 0 && (kind == "continue" || kind == "local" || account.cookies().is_none()) {
             return Ok(vec![]);
         }
         if kind == "continue" {
             return self.0.progress_list(&account.profile.id, true).await;
+        }
+        // CouchTube's own history of this profile, never YouTube's.
+        if kind == "local" {
+            return self.0.progress_list(&account.profile.id, false).await;
         }
         // Guest has local watch history; account feeds require a cookie database.
         if account.cookies().is_none() {

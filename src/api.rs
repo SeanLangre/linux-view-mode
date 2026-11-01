@@ -551,7 +551,7 @@ async fn feed(
         annotate(&state, &account.profile.id, &mut videos).await;
         return Ok(Json(videos));
     }
-    if kind != "continue" && ytdlp::feed_target(&kind).is_none() {
+    if kind != "continue" && kind != "local" && ytdlp::feed_target(&kind).is_none() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "unknown feed"));
     }
     let account = {

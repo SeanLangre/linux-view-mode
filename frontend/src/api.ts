@@ -127,7 +127,7 @@ export function setProfileScope(id: string) {
   profileScope = id
 }
 
-export type FeedKind = 'foryou' | 'continue' | 'recommended' | 'subscriptions' | 'history' | 'watchlater' | 'liked'
+export type FeedKind = 'foryou' | 'continue' | 'local' | 'recommended' | 'subscriptions' | 'history' | 'watchlater' | 'liked'
 export const feed = (kind: FeedKind, refresh = false, page = 0) =>
   playback<Video[]>(`feed/${kind}?page=${page}${refresh ? '&refresh=true' : ''}`)
 export type Seed = { id: number; kind: 'theme' | 'video' | 'channel'; value: string; label: string }
