@@ -130,9 +130,9 @@ export function setProfileScope(id: string) {
 export type FeedKind = 'foryou' | 'continue' | 'local' | 'recommended' | 'subscriptions' | 'history' | 'watchlater' | 'liked'
 export const feed = (kind: FeedKind, refresh = false, page = 0) =>
   playback<Video[]>(`feed/${kind}?page=${page}${refresh ? '&refresh=true' : ''}`)
-export type Seed = { id: number; kind: 'theme' | 'video' | 'channel'; value: string; label: string }
+export type Seed = { id: number; kind: 'theme' | 'video' | 'channel' | 'exclude'; value: string; label: string }
 export const seeds = () => playback<Seed[]>('seeds')
-export const addSeed = (kind: 'theme' | 'video' | 'channel', value: string, label?: string) =>
+export const addSeed = (kind: 'theme' | 'video' | 'channel' | 'exclude', value: string, label?: string) =>
   playback<Seed[]>('seeds', { kind, value, label })
 export async function removeSeed(id: number) {
   const res = await fetch(`/api/seeds/${id}`, { method: 'DELETE' })

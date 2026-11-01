@@ -63,7 +63,7 @@ impl Database {
             CREATE TABLE IF NOT EXISTS seeds (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-                kind TEXT NOT NULL CHECK (kind IN ('theme','video','channel')),
+                kind TEXT NOT NULL CHECK (kind IN ('theme','video','channel','exclude')),
                 value TEXT NOT NULL, label TEXT NOT NULL,
                 created_at INTEGER NOT NULL DEFAULT (unixepoch()),
                 UNIQUE(profile_id, kind, value)
@@ -81,6 +81,27 @@ impl Database {
             INSERT OR IGNORE INTO profiles(id, name, color) VALUES ('guest', 'Guest', '#707887');
             INSERT OR IGNORE INTO settings(key, value) VALUES ('active_profile', 'guest');",
         )?;
+        // Older databases only allow theme, video and channel seeds; rebuild the table to add exclusions.
+        let old_seeds = connection
+            .query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='seeds'", [], |r| r.get::<_, String>(0))?
+            .contains("'channel')");
+        if old_seeds {
+            connection.execute_batch(
+                "BEGIN;
+                ALTER TABLE seeds RENAME TO seeds_old;
+                CREATE TABLE seeds (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL CHECK (kind IN ('theme','video','channel','exclude')),
+                    value TEXT NOT NULL, label TEXT NOT NULL,
+                    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                    UNIQUE(profile_id, kind, value)
+                );
+                INSERT INTO seeds(id,profile_id,kind,value,label,created_at) SELECT id,profile_id,kind,value,label,created_at FROM seeds_old;
+                DROP TABLE seeds_old;
+                COMMIT;",
+            )?;
+        }
         let has_subtitles = connection
             .prepare("SELECT 1 FROM pragma_table_info('profiles') WHERE name = 'subtitles'")?
             .exists([])?;

@@ -170,7 +170,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
       case 'foryou':
         return [{ kind: 'seed-input' },
           { kind: 'menu', items: [{ label: 'History', action: 'local' }] },
-          ...(seeds.length > 0 ? [{ kind: 'chips', title: 'Your seeds', items: seeds.map((seed) => `${seed.kind === 'theme' ? 'Theme' : seed.kind === 'video' ? 'Video' : 'Channel'}: ${seed.label}`) } as const] : []),
+          ...(seeds.length > 0 ? [{ kind: 'chips', title: 'Your seeds', items: seeds.map((seed) => `${{ theme: 'Theme', video: 'Video', channel: 'Channel', exclude: 'Not' }[seed.kind]}: ${seed.label}`) } as const] : []),
           ...data.rows]
       case 'queue':
         return [{ kind: 'menu', items: [{ label: 'Play next', action: 'next' }, { label: 'Clear queue', action: 'clear' }] }, ...data.rows]
@@ -244,6 +244,17 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
   async function submitSeed() {
     const text = draft.trim()
     if (!text) return
+    // "not music" or "-music" hides videos with that word in the title or channel name.
+    const exclusion = /^(?:not\s+|-\s*)(.+)$/i.exec(text)
+    if (exclusion) {
+      try {
+        setSeeds(await api.addSeed('exclude', exclusion[1]))
+        setDataRevision((value) => value + 1)
+        setDraft('')
+        notify(`Hiding: ${exclusion[1]}`)
+      } catch (err) { notify((err as Error).message) }
+      return
+    }
     const isLink = /^(https?:\/\/|[\w-]{11}$)/.test(text)
     try {
       setSeeds(await api.addSeed(isLink ? 'video' : 'theme', text))
@@ -517,7 +528,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
       {(data.loading || data.loadingMore) && <SkeletonRow />}
       {!data.loading && !data.error && !data.rows.some((row) => row.kind === 'videos' && row.videos.length > 0) && (
         <p className="status">{screen.kind === 'home' ? 'Search for a video, or sign in to load your recommendations and subscriptions.'
-          : screen.kind === 'foryou' ? 'Type a theme, paste a video link, or press S on any video to seed its channel.'
+          : screen.kind === 'foryou' ? 'Type a theme, paste a video link, or press S on any video to seed its channel. Type “not music” to hide a topic.'
           : screen.kind === 'queue' ? 'Your queue is empty. Press A on a video to add it.'
           : screen.kind === 'feed' ? 'No videos here. Account feeds need a signed-in profile; press U to refresh.' : ''}</p>
       )}
@@ -615,7 +626,7 @@ function RowView({
             className="search-box"
             value={draft}
             onChange={(e) => onDraft(e.target.value)}
-            placeholder="Add a theme, or paste a YouTube link…"
+            placeholder="Add a theme, paste a link, or type “not music”…"
             aria-label="Add a theme or video to your seeds"
             spellCheck={false}
             autoComplete="off"

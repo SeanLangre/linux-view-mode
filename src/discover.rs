@@ -53,6 +53,7 @@ pub fn rank(
     known: &HashSet<String>,
     dismissed_channels: &HashMap<String, u32>,
     seed_channels: &HashSet<String>,
+    excluded: &[String],
     now: i64,
 ) -> Vec<Video> {
     struct Entry { score: f64, order: usize, reasons: Vec<String>, video: Video }
@@ -60,7 +61,7 @@ pub fn rank(
     let mut order = 0;
     for source in sources {
         for (position, video) in source.videos.into_iter().enumerate() {
-            if known.contains(&video.id) {
+            if known.contains(&video.id) || is_excluded(&video, excluded) {
                 continue;
             }
             let points = 1.0 / (1.0 + position as f64 * 0.15);
@@ -90,6 +91,22 @@ pub fn rank(
         video.channel_id.as_ref().is_some_and(|channel| seed_channels.contains(channel))
     });
     mix(seeded, new, NEW_CHANNEL_SHARE)
+}
+
+/// Whether the title or channel name contains an excluded word or phrase, as whole words
+/// and ignoring case ("music" does not match "museum").
+fn is_excluded(video: &Video, excluded: &[String]) -> bool {
+    if excluded.is_empty() {
+        return false;
+    }
+    let words = |text: &str| -> Vec<String> {
+        text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect()
+    };
+    let text = [words(&video.title), words(video.channel.as_deref().unwrap_or(""))];
+    excluded.iter().any(|term| {
+        let term = words(term);
+        !term.is_empty() && text.iter().any(|t| t.windows(term.len()).any(|w| w == term.as_slice()))
+    })
 }
 
 /// Interleaves two ranked lists so `new` takes `share` of the slots, spread evenly; when one
@@ -149,7 +166,7 @@ mod tests {
         videos.iter().map(|v| v.id.as_str()).collect()
     }
     fn rank_plain(sources: Vec<Source>, known: &HashSet<String>) -> Vec<Video> {
-        rank(sources, known, &HashMap::new(), &HashSet::new(), NOW)
+        rank(sources, known, &HashMap::new(), &HashSet::new(), &[], NOW)
     }
     const NOW: i64 = 1_800_000_000;
 
@@ -205,7 +222,7 @@ mod tests {
         disliked.channel_id = Some("UCdisliked".into());
         let s = source("s", vec![disliked, liked]);
         let dismissed = HashMap::from([("UCdisliked".to_string(), 2)]);
-        let ranked = rank(vec![s], &HashSet::new(), &dismissed, &HashSet::new(), NOW);
+        let ranked = rank(vec![s], &HashSet::new(), &dismissed, &HashSet::new(), &[], NOW);
         assert_eq!(ids(&ranked), ["aaaaaaaaaaa", "bbbbbbbbbbb"]);
     }
 
@@ -219,12 +236,34 @@ mod tests {
         let mut found: Vec<Video> = (0..10).map(|i| from(&format!("seeded{i:05}"), "UCseed")).collect();
         found.extend((0..10).map(|i| from(&format!("fresh{i:06}"), "UCnew")));
         let seeds = HashSet::from(["UCseed".to_string()]);
-        let ranked = rank(vec![source("s", found)], &HashSet::new(), &HashMap::new(), &seeds, NOW);
+        let ranked = rank(vec![source("s", found)], &HashSet::new(), &HashMap::new(), &seeds, &[], NOW);
         let new_in_top_10 = ranked.iter().take(10).filter(|v| v.channel_id.as_deref() == Some("UCnew")).count();
         assert_eq!(new_in_top_10, 3);
         // With no new-channel videos at all, the seeded ones still fill the list.
         let only = vec![from("aaaaaaaaaaa", "UCseed"), from("bbbbbbbbbbb", "UCseed")];
-        assert_eq!(rank(vec![source("s", only)], &HashSet::new(), &HashMap::new(), &seeds, NOW).len(), 2);
+        assert_eq!(rank(vec![source("s", only)], &HashSet::new(), &HashMap::new(), &seeds, &[], NOW).len(), 2);
+    }
+
+    #[test]
+    fn excluded_words_hide_whole_word_matches_in_title_or_channel() {
+        let mut music = video("aaaaaaaaaaa", None);
+        music.title = "Best Lo-Fi MUSIC mix".into();
+        let mut museum = video("bbbbbbbbbbb", None);
+        museum.title = "A day at the museum".into();
+        let mut channel = video("ccccccccccc", None);
+        channel.title = "Live set".into();
+        channel.channel = Some("Chill Music Records".into());
+        let mut essay = video("ddddddddddd", None);
+        essay.title = "A video  essay about trains".into();
+        let all = || vec![music.clone(), museum.clone(), channel.clone(), essay.clone()];
+        let rank_excluding = |terms: &[&str]| {
+            let terms: Vec<String> = terms.iter().map(|t| t.to_string()).collect();
+            let ranked = rank(vec![source("s", all())], &HashSet::new(), &HashMap::new(), &HashSet::new(), &terms, NOW);
+            ranked.iter().map(|v| v.id.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(rank_excluding(&["music"]), ["bbbbbbbbbbb", "ddddddddddd"]);
+        assert_eq!(rank_excluding(&["video essay"]), ["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"]);
+        assert_eq!(rank_excluding(&[]).len(), 4);
     }
 
     #[test]

@@ -734,7 +734,14 @@ fn parse_seed(kind: &str, value: &str, label: Option<&str>) -> Result<(String, S
             let name = label.map(|l| l.chars().filter(|c| !c.is_control()).take(80).collect::<String>());
             Ok((id.to_string(), name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| id.to_string())))
         }
-        _ => Err(bad("kind must be theme, video or channel")),
+        "exclude" => {
+            let word = value.trim().trim_matches('"').split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+            if word.is_empty() || word.chars().count() > 40 {
+                return Err(bad("an exclusion must be 1 to 40 characters"));
+            }
+            Ok((word.clone(), word))
+        }
+        _ => Err(bad("kind must be theme, video, channel or exclude")),
     }
 }
 async fn add_seed(
