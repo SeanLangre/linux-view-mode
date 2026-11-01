@@ -47,9 +47,9 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| "config/mpv".into());
     let player = player::Player::new(player_config)?;
-    // Videos play in Firefox unless COUCHTUBE_PLAYER=mpv; mpv remains the fallback either way.
+    // Videos play in the CouchTube window unless COUCHTUBE_PLAYER=mpv; mpv remains the fallback.
     if std::env::var("COUCHTUBE_PLAYER").as_deref() != Ok("mpv") {
-        player.use_firefox(port).await;
+        player.use_browser().await;
     }
     let data_dir = match std::env::var_os("COUCHTUBE_DATA_DIR") {
         Some(path) => PathBuf::from(path),
@@ -72,6 +72,14 @@ async fn main() -> Result<()> {
     if let Err(std::fs::TryLockError::WouldBlock) = lock.try_lock() {
         anyhow::bail!("CouchTube is already running (lock held on {}/couchtube.lock)", data_dir.display());
     }
+    // The kiosk Firefox shows the video player, so it may start videos without a click.
+    let kiosk_profile = data_dir.join("kiosk-firefox");
+    std::fs::create_dir_all(&kiosk_profile).context("could not create the kiosk profile")?;
+    std::fs::write(
+        kiosk_profile.join("user.js"),
+        "user_pref(\"media.autoplay.default\", 0);\nuser_pref(\"media.autoplay.blocking_policy\", 0);\n",
+    )
+    .context("could not write the kiosk preferences")?;
     let pair_port = match std::env::var("COUCHTUBE_PAIR_PORT") {
         Ok(p) => p.parse().context("COUCHTUBE_PAIR_PORT must be a port number")?,
         Err(_) => DEFAULT_PAIR_PORT,

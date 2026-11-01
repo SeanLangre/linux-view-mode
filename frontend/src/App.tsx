@@ -560,7 +560,19 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
         {stack.length > 1 && <span><kbd>Esc</kbd>Back</span>}
       </footer>
 
-      {(starting || playback?.playing) && (
+      {playback?.playing && playback.page && (
+        <iframe
+          key={playback.page}
+          className="player-frame"
+          src={playback.page}
+          title="Player"
+          allow="autoplay; fullscreen"
+          ref={(frame) => frame?.focus()}
+          onLoad={(e) => e.currentTarget.contentWindow?.focus()}
+        />
+      )}
+
+      {(starting || playback?.playing) && !playback?.page && (
         <div className="toast" role="status">
           {starting ? 'Starting' : 'Playing'}: {playback?.title
             ?? (playback?.id === selectedTitle.current?.id ? selectedTitle.current?.title : playback?.id)

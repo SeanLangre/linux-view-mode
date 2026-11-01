@@ -15,7 +15,7 @@ use std::{
 };
 use tokio::{process::Command, sync::Mutex};
 
-pub(crate) const USER_JS: &str = include_str!("../config/firefox/user.js");
+const USER_JS: &str = include_str!("../config/firefox/user.js");
 const YOUTUBE_TV_URL: &str = "https://www.youtube.com/tv";
 /// YouTube TV only serves its leanback interface to TV browsers; this is a games console's.
 const TV_USER_AGENT: &str = "Mozilla/5.0 (PlayStation; PlayStation 5/2.26) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0 Safari/605.1.15";

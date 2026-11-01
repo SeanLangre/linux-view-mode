@@ -1,5 +1,6 @@
-//! Owns the player for one video: Firefox showing YouTube's embedded player (reporting back
-//! over HTTP) or, as the fallback and by choice, mpv observed over a persistent IPC connection.
+//! Owns the player for one video: YouTube's embedded player, shown by the CouchTube kiosk window
+//! itself (the page reports back over HTTP), or, as the fallback and by choice, mpv observed over
+//! a persistent IPC connection.
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -24,27 +25,27 @@ pub struct Player(Arc<Mutex<Inner>>);
 struct Inner {
     config: PathBuf,
     executable: PathBuf,
-    firefox: PathBuf,
-    /// Port of our own server when videos play in Firefox; `None` plays everything in mpv.
-    web_port: Option<u16>,
+    /// Videos play in the browser window that shows CouchTube; otherwise (and as the fallback) in mpv.
+    web: bool,
     running: Option<Running>,
     error: Option<String>,
     sequence: u64,
     ended: VecDeque<Ended>,
 }
 struct Running {
-    child: Child,
+    /// mpv's process; the browser player has none because the kiosk window shows it.
+    child: Option<Child>,
     directory: PathBuf,
     id: String,
     sequence: u64,
     details: Arc<StdMutex<Details>>,
     observer: JoinHandle<()>,
-    /// Playing in Firefox rather than mpv.
+    /// Playing in the browser rather than mpv.
     web: bool,
+    /// The player page the CouchTube window opens, for a browser session.
+    page: Option<String>,
     started: Instant,
     launch: Launch,
-    /// A throwaway Firefox profile (Guest has none); removed when the player ends.
-    temp_profile: Option<PathBuf>,
 }
 /// What a video was started with, kept so mpv can take over if Firefox cannot play it.
 #[derive(Clone)]
@@ -72,14 +73,9 @@ pub struct WebReport {
     pub outcome: Option<String>,
     pub code: Option<i64>,
 }
-/// The Firefox page gives up on a video that has not started playing after this long.
-const WEB_START_TIMEOUT: Duration = Duration::from_secs(30);
-/// Autoplay without a click, and no fullscreen prompts, for the Firefox that plays videos.
-const PLAYER_PREFS: &str = "user_pref(\"media.autoplay.default\", 0);
-user_pref(\"media.autoplay.blocking_policy\", 0);
-user_pref(\"full-screen-api.warning.timeout\", 0);
-user_pref(\"full-screen-api.approval-required\", false);
-";
+/// mpv takes over a video the browser player has not started playing after this long (for example
+/// when no CouchTube window is open to show it).
+const WEB_START_TIMEOUT: Duration = Duration::from_secs(20);
 #[derive(Clone, Default)]
 struct Details {
     title: Option<String>,
@@ -100,6 +96,7 @@ impl Running {
             .clone();
         Status {
             playing: true,
+            page: self.page.clone(),
             id: Some(self.id.clone()),
             session: Some(self.sequence),
             title: details.title,
@@ -122,16 +119,17 @@ impl Running {
 impl Drop for Running {
     fn drop(&mut self) {
         self.observer.abort();
-        let _ = std::fs::remove_file(self.directory.join("ipc"));
-        if let Some(profile) = &self.temp_profile {
-            let _ = std::fs::remove_dir_all(profile);
+        if !self.web {
+            let _ = std::fs::remove_file(self.directory.join("ipc"));
+            let _ = std::fs::remove_dir(&self.directory);
         }
-        let _ = std::fs::remove_dir(&self.directory);
     }
 }
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Status {
     pub playing: bool,
+    /// Player page the CouchTube window must show (browser playback only).
+    pub page: Option<String>,
     pub id: Option<String>,
     pub session: Option<u64>,
     pub title: Option<String>,
@@ -160,18 +158,17 @@ impl Player {
         Ok(Self(Arc::new(Mutex::new(Inner {
             config,
             executable: "mpv".into(),
-            firefox: "firefox".into(),
-            web_port: None,
+            web: false,
             running: None,
             error: None,
             sequence: 0,
             ended: VecDeque::new(),
         }))))
     }
-    /// Plays videos in Firefox (through our server on `port`) instead of mpv. mpv still takes over
-    /// for a video that YouTube will not play in an embedded player.
-    pub async fn use_firefox(&self, port: u16) {
-        self.0.lock().await.web_port = Some(port);
+    /// Plays videos in the browser window that shows CouchTube instead of mpv. mpv still takes
+    /// over for a video that YouTube will not play in an embedded player.
+    pub async fn use_browser(&self) {
+        self.0.lock().await.web = true;
     }
     pub async fn play(
         &self,
@@ -195,15 +192,10 @@ impl Player {
             subtitles: subtitles.map(str::to_owned),
         };
         let sequence = inner.sequence + 1;
-        let running = match inner.web_port {
-            Some(port) => match inner.launch_web(id, sequence, &launch, port).await {
-                Ok(running) => running,
-                Err(err) => {
-                    tracing::warn!("could not open Firefox, using mpv: {err:#}");
-                    inner.launch_mpv(id, sequence, &launch)?
-                }
-            },
-            None => inner.launch_mpv(id, sequence, &launch)?,
+        let running = if inner.web {
+            inner.launch_page(id, sequence, &launch)
+        } else {
+            inner.launch_mpv(id, sequence, &launch)?
         };
         inner.sequence = sequence;
         inner.running = Some(running);
@@ -348,74 +340,40 @@ impl Inner {
         let details = Arc::new(StdMutex::new(Details::default()));
         let observer = tokio::spawn(observe(socket, details.clone()));
         Ok(Running {
-            child,
+            child: Some(child),
             directory,
             id: id.into(),
             sequence,
             details,
             observer,
             web: false,
+            page: None,
             started: Instant::now(),
             launch: launch.clone(),
-            temp_profile: None,
         })
     }
 
-    /// Opens a kiosk Firefox on our player page, signed in as the profile when it has an account.
-    async fn launch_web(&self, id: &str, sequence: u64, launch: &Launch, port: u16) -> Result<Running> {
-        let directory = self.runtime_directory()?;
-        let (profile, temp_profile) = match &launch.firefox {
-            Some(folder) => (folder.clone(), None),
-            None => {
-                // Guest has no profile directory of its own, so use a throwaway one.
-                let folder = directory.join("firefox");
-                crate::profiles::private_directory(&folder)?;
-                (folder.clone(), Some(folder))
-            }
-        };
-        let prepared = std::fs::write(
-            profile.join("user.js"),
-            format!("{}\n{PLAYER_PREFS}", crate::profiles::USER_JS),
-        );
-        let mut url = format!("http://127.0.0.1:{port}/watch.html?v={id}&s={sequence}");
+    /// Starts a browser session: the CouchTube window opens the player page named in the status.
+    fn launch_page(&self, id: &str, sequence: u64, launch: &Launch) -> Running {
+        let mut page = format!("/watch.html?v={id}&s={sequence}");
         if let Some(start) = launch.start {
-            url.push_str(&format!("&start={start}"));
+            page.push_str(&format!("&start={start}"));
         }
         if let Some(language) = &launch.subtitles {
-            url.push_str(&format!("&sub={language}"));
+            page.push_str(&format!("&sub={language}"));
         }
-        let spawned = match prepared {
-            Ok(()) => Command::new(&self.firefox)
-                .args(["--no-remote", "--new-instance", "--kiosk", "--profile"])
-                .arg(&profile)
-                .arg(&url)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .kill_on_drop(true)
-                .spawn()
-                .context("could not start Firefox"),
-            Err(err) => Err(err).context("could not prepare the Firefox profile"),
-        };
-        let child = match spawned {
-            Ok(child) => child,
-            Err(err) => {
-                let _ = std::fs::remove_dir_all(&directory);
-                return Err(err);
-            }
-        };
-        Ok(Running {
-            child,
-            directory,
+        Running {
+            child: None,
+            directory: PathBuf::new(),
             id: id.into(),
             sequence,
             details: Arc::new(StdMutex::new(Details::default())),
             observer: tokio::spawn(async {}),
             web: true,
+            page: Some(page),
             started: Instant::now(),
             launch: launch.clone(),
-            temp_profile,
-        })
+        }
     }
 
     async fn reap(&mut self) -> Result<()> {
@@ -426,12 +384,8 @@ impl Inner {
                     let details = running.details.lock().unwrap_or_else(|p| p.into_inner());
                     (details.outcome.clone(), details.position)
                 };
-                let exited = running.child.try_wait()?.is_some();
                 web_outcome = match outcome {
                     Some(outcome) => Some(outcome),
-                    // The window was closed (Alt+F4) after playing, or Firefox died without ever playing.
-                    None if exited && position.is_some() => Some(Outcome::Quit),
-                    None if exited => Some(Outcome::Error(-2)),
                     None if position.is_none() && running.started.elapsed() > WEB_START_TIMEOUT => {
                         Some(Outcome::Error(-3))
                     }
@@ -439,15 +393,14 @@ impl Inner {
                 };
                 None
             }
-            Some(running) => running.child.try_wait()?,
+            Some(running) => running.child.as_mut().map(|c| c.try_wait()).transpose()?.flatten(),
             None => None,
         };
         if let Some(outcome) = web_outcome {
             let mut running = self.running.take().expect("running player");
-            close_firefox(&mut running.child).await;
             running.finish().await;
             if let Outcome::Error(code) = outcome {
-                tracing::warn!(video_id=%running.id, code, "Firefox could not play this video; using mpv");
+                tracing::warn!(video_id=%running.id, code, "the browser could not play this video; using mpv");
                 let mut launch = running.launch.clone();
                 let position = running.status().position.filter(|p| *p >= 5.0);
                 launch.start = position.or(launch.start);
@@ -467,7 +420,7 @@ impl Inner {
                 Outcome::Next => EndReason::Next,
                 _ => EndReason::Stopped,
             };
-            tracing::debug!(video_id=%running.id, ?reason, "Firefox session ended");
+            tracing::debug!(video_id=%running.id, ?reason, "browser session ended");
             self.ended.push_back(Ended { status: running.status(), reason });
             return Ok(());
         }
@@ -503,12 +456,10 @@ impl Inner {
     async fn stop(&mut self) -> Result<()> {
         self.reap().await?;
         if let Some(mut running) = self.running.take() {
-            if running.child.try_wait()?.is_none() {
-                if running.web {
-                    close_firefox(&mut running.child).await;
-                } else {
-                    running.child.kill().await.context("could not stop mpv")?;
-                }
+            if let Some(child) = running.child.as_mut()
+                && child.try_wait()?.is_none()
+            {
+                child.kill().await.context("could not stop mpv")?;
             }
             running.finish().await;
             self.ended.push_back(Ended {
@@ -518,19 +469,6 @@ impl Inner {
         }
         self.error = None;
         Ok(())
-    }
-}
-
-/// Asks Firefox to quit so it saves its profile (cookies), and kills it if it does not.
-async fn close_firefox(child: &mut Child) {
-    if child.try_wait().ok().flatten().is_some() {
-        return;
-    }
-    if let Some(pid) = child.id() {
-        let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).status().await;
-    }
-    if tokio::time::timeout(Duration::from_secs(5), child.wait()).await.is_err() {
-        let _ = child.kill().await;
     }
 }
 
@@ -658,7 +596,7 @@ mod tests {
         let (first_pid, first_socket_dir) = {
             let inner = player.0.lock().await;
             let running = inner.running.as_ref().unwrap();
-            (running.child.id().unwrap(), running.directory.clone())
+            (running.child.as_ref().unwrap().id().unwrap(), running.directory.clone())
         };
         assert!(player.status().await.unwrap().playing);
         player.play("rFZHOHl-L8A", None, None, None).await.unwrap();
@@ -698,17 +636,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn firefox_reports_drive_status_commands_and_the_end() {
+    async fn browser_reports_drive_status_commands_and_the_end() {
         let directory = std::env::temp_dir().join(format!("ct-web-test-{}", std::process::id()));
         std::fs::create_dir(&directory).unwrap();
         let player = Player::new("config/mpv".into()).unwrap();
-        {
-            let mut inner = player.0.lock().await;
-            inner.firefox = fake(&directory, "fake-firefox", "#!/bin/sh\nexec sleep 60\n");
-        }
-        player.use_firefox(7878).await;
-        let session = player.play("aqz-KE-bpKQ", None, None, None).await.unwrap();
-        assert!(player.status().await.unwrap().playing);
+        player.use_browser().await;
+        let session = player.play("aqz-KE-bpKQ", Some(30.0), None, Some("en")).await.unwrap();
+        let status = player.status().await.unwrap();
+        assert!(status.playing);
+        assert_eq!(status.page, Some(format!("/watch.html?v=aqz-KE-bpKQ&s={session}&start=30&sub=en")));
         // A report for another session is ignored.
         assert!(player.web_report(WebReport { session: session + 1, position: Some(9.0), ..Default::default() }).await.is_empty());
         player.command(&[json!("cycle"), json!("pause")]).await.unwrap();
@@ -736,10 +672,9 @@ mod tests {
         let player = Player::new("config/mpv".into()).unwrap();
         {
             let mut inner = player.0.lock().await;
-            inner.firefox = fake(&directory, "fake-firefox", "#!/bin/sh\nexec sleep 60\n");
             inner.executable = fake(&directory, "fake-mpv", "#!/bin/sh\nexec sleep 60\n");
         }
-        player.use_firefox(7878).await;
+        player.use_browser().await;
         let session = player.play("aqz-KE-bpKQ", Some(30.0), None, None).await.unwrap();
         player.web_report(WebReport { session, outcome: Some("error".into()), code: Some(150), ..Default::default() }).await;
         let status = player.status().await.unwrap();
@@ -747,9 +682,11 @@ mod tests {
         assert_eq!(status.session, Some(session));
         assert!(!player.0.lock().await.running.as_ref().unwrap().web);
         assert!(player.take_ended().await.unwrap().is_empty());
-        // A missing Firefox also falls back to mpv.
-        player.0.lock().await.firefox = directory.join("missing");
+        // A page that never starts (no window open to show it) also falls back to mpv.
         player.play("rFZHOHl-L8A", None, None, None).await.unwrap();
+        assert!(player.0.lock().await.running.as_ref().unwrap().web);
+        player.0.lock().await.running.as_mut().unwrap().started = Instant::now() - WEB_START_TIMEOUT - Duration::from_secs(1);
+        assert!(player.status().await.unwrap().playing);
         assert!(!player.0.lock().await.running.as_ref().unwrap().web);
         player.stop().await.unwrap();
         std::fs::remove_dir_all(directory).unwrap();

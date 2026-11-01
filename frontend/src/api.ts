@@ -59,6 +59,8 @@ export const channel = (id: string, page = 0, refresh = false) =>
 
 export type PlayerStatus = {
   playing: boolean
+  /** Player page this window must show (playback in the browser rather than mpv). */
+  page?: string | null
   id: string | null
   session?: number | null
   title: string | null

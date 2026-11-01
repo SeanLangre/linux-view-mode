@@ -10,11 +10,21 @@
   #osd { position: fixed; left: 2rem; top: 2rem; max-width: 70vw; padding: 0.6rem 1rem; border-radius: 0.5rem;
     background: rgb(0 0 0 / 0.8); font-size: 2rem; white-space: pre-line; opacity: 0; transition: opacity 0.2s; }
   #osd.on { opacity: 1; }
+  /* Timeline: a thin line always, the full bar with times after a seek, pause or the I key. */
+  #line { position: fixed; left: 0; bottom: 0; height: 4px; width: 0; background: #e53935; z-index: 2; }
+  #bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 3rem 2rem 1.2rem; z-index: 3; opacity: 0; transition: opacity 0.2s;
+    background: linear-gradient(transparent, rgb(0 0 0 / 0.75)); }
+  #bar.on { opacity: 1; }
+  #track { height: 0.5rem; border-radius: 0.25rem; background: rgb(255 255 255 / 0.3); overflow: hidden; }
+  #fill { height: 100%; width: 0; background: #e53935; }
+  #times { display: flex; justify-content: space-between; margin-top: 0.6rem; font-size: 1.6rem; }
 </style>
 </head>
 <body tabindex="0">
 <div id="player"></div>
 <div id="osd"></div>
+<div id="line"></div>
+<div id="bar"><div id="track"><div id="fill"></div></div><div id="times"><span id="now"></span><span id="total"></span></div></div>
 <script>
 // Plays one video in YouTube's embedded player and mirrors what mpv offered: the backend gets
 // position, duration and pause state, and sends back the same commands the phone remote and
@@ -32,6 +42,26 @@ let captions = Boolean(language)
 let segments = []
 let osdTimer = 0
 let failures = 0
+let barTimer = 0
+
+function showBar(ms = 3000) {
+  document.getElementById('bar').classList.add('on')
+  clearTimeout(barTimer)
+  barTimer = setTimeout(() => {
+    if (!ready || player.getPlayerState() === 1) document.getElementById('bar').classList.remove('on')
+  }, ms)
+}
+
+function drawTimeline() {
+  if (!ready) return
+  const duration = player.getDuration()
+  const position = player.getCurrentTime()
+  const share = duration > 0 ? Math.min(100, Math.max(0, (position / duration) * 100)) : 0
+  document.getElementById('line').style.width = `${share}%`
+  document.getElementById('fill').style.width = `${share}%`
+  document.getElementById('now').textContent = clock(position)
+  document.getElementById('total').textContent = duration > 0 ? clock(duration) : 'Live'
+}
 
 function show(text, ms = 2500) {
   const osd = document.getElementById('osd')
@@ -94,7 +124,9 @@ function run(command) {
   else if (name === 'seek' && typeof a === 'number') {
     const target = Math.max(0, player.getCurrentTime() + a)
     player.seekTo(target, true)
-    show(`${a > 0 ? '+' : ''}${a}s  ${clock(target)}`, 1200)
+    show(`${a > 0 ? '+' : ''}${a}s`, 1200)
+    drawTimeline()
+    showBar()
   } else if (name === 'add' && a === 'volume' && typeof b === 'number') {
     const volume = Math.min(100, Math.max(0, Math.round(player.getVolume() + b)))
     player.setVolume(volume)
@@ -103,15 +135,28 @@ function run(command) {
 }
 
 function togglePause() {
-  if (player.getPlayerState() === 1) { player.pauseVideo(); show('Paused', 1200) }
-  else { player.playVideo(); show('Playing', 1200) }
+  if (player.getPlayerState() === 1) { player.pauseVideo(); show('Paused', 1200); showBar(600000) }
+  else { player.playVideo(); show('Playing', 1200); showBar() }
 }
 
 function toggleCaptions() {
-  captions = !captions
   try {
-    if (captions) player.loadModule('captions'); else player.unloadModule('captions')
-    show(captions ? 'Subtitles on' : 'Subtitles off', 1200)
+    if (captions) {
+      // getOption keeps reporting the old track after this, so the state is tracked here.
+      player.setOption('captions', 'track', {})
+      player.unloadModule('captions')
+      captions = false
+      show('Subtitles off', 1200)
+      return
+    }
+    player.loadModule('captions')
+    const tracks = player.getOption('captions', 'tracklist') || []
+    // The profile's language if the video has it, else the first track YouTube lists.
+    const wanted = tracks.find((t) => t.languageCode === language || t.languageCode.startsWith(language + '-')) || tracks[0]
+    if (!wanted) { show('No subtitles'); return }
+    player.setOption('captions', 'track', { languageCode: wanted.languageCode })
+    captions = true
+    show(`Subtitles: ${wanted.languageName || wanted.languageCode}`, 1500)
   } catch { show('No subtitles') }
 }
 
@@ -135,7 +180,9 @@ document.addEventListener('keydown', (event) => {
   else if (key === 'c') run(['cycle', 'sub'])
   else if (key === 'i' && ready) {
     const s = snapshot()
-    show(`${s.title || ''}\n${clock(s.position)} / ${clock(s.duration)}`, 4000)
+    show(s.title || '', 4000)
+    drawTimeline()
+    showBar(4000)
   }
 })
 
@@ -187,6 +234,7 @@ window.onYouTubeIframeAPIReady = () => {
 void loadSegments()
 setInterval(() => { if (!finished) void report() }, 500)
 setInterval(skipSponsors, 250)
+setInterval(drawTimeline, 250)
 setInterval(() => window.focus(), 2000)
 const script = document.createElement('script')
 script.src = 'https://www.youtube.com/iframe_api'

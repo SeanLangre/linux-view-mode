@@ -7,11 +7,11 @@ A fullscreen, keyboard-only YouTube app for a TV. It runs on an Arch Linux box c
 
 The full design and roadmap are in [`plan.md`](plan.md); the working checklist is [`TODO.md`](TODO.md).
 
-## Playback in Firefox
+## Playback in the CouchTube window
 
-By default a video opens in a kiosk Firefox window, as the active profile (so its YouTube login and Premium apply), on the page `frontend/public/watch.html`. The page shows YouTube's embedded player and reports position, duration and pause state to `POST /api/player/report`; the answer carries the commands from the phone remote. It keeps mpv's keys (**Space**, arrows, **9**/**0**, **M**, **C**, **I**, **N**, **Esc**/**Q**), skips paid sponsor segments, and honours the profile's subtitle language. Resume, progress, watched marks, the queue and "Continue watching" work as before.
+By default a video plays inside the Firefox kiosk window that already shows CouchTube, so there is no second window to focus. The backend reports the player page (`frontend/public/watch.html`) in `/api/status` (`page`); the interface then covers the screen with it. The page shows YouTube's embedded player and reports position, duration and pause state to `POST /api/player/report`; the answer carries the commands from the phone remote. It keeps mpv's keys (**Space**, arrows, **9**/**0**, **M**, **C**, **I**, **N**, **Esc**/**Q**), skips paid sponsor segments, and honours the profile's subtitle language. Resume, progress, watched marks, the queue and "Continue watching" work as before. The backend writes `kiosk-firefox/user.js` at start so that Firefox may autoplay.
 
-YouTube refuses to embed some videos (many music videos, error 150/153). When that happens, or Firefox cannot start or does not play within 30 seconds, mpv plays the video instead from the same position. Set `COUCHTUBE_PLAYER=mpv` to always use mpv. Limits of the embedded player: no way to pick the quality (YouTube chooses), and skip buttons on ads cannot be clicked, so install uBlock Origin through the Firefox policy (`config/firefox/policies.json`).
+mpv plays the video instead, from the same position, when YouTube refuses to embed it (many music videos, error 150/153) or the page has not started within 20 seconds (for example when no CouchTube window is open, or it is still on the profile screen). Set `COUCHTUBE_PLAYER=mpv` to always use mpv. Limits: the kiosk profile is not signed in to YouTube (account logins stay out of the interface), so Premium, age-restricted videos and your account's ad settings do not apply, and age-restricted videos fall back to mpv; YouTube chooses the quality; ad skip buttons cannot be clicked, so install uBlock Origin through the Firefox policy (`config/firefox/policies.json`).
 
 ## Status
 
@@ -67,7 +67,7 @@ and open `http://127.0.0.1:5173`. Vite forwards `/api` calls to the backend (wit
 | `COUCHTUBE_REMOTE_PORT` | `7880` | Port for the phone remote; opened on all interfaces only while the remote is switched on (see below) |
 | `COUCHTUBE_CEC_DEVICE` | `/dev/cec0` | HDMI-CEC device used by `cec-ctl` for **Turn TV off** |
 | `COUCHTUBE_FRONTEND` | `frontend/dist` | Folder with the built frontend |
-| `COUCHTUBE_PLAYER` | `firefox` | `mpv` plays every video in mpv; otherwise videos play in a kiosk Firefox (see below) |
+| `COUCHTUBE_PLAYER` | `browser` | `mpv` plays every video in mpv; otherwise videos play in the CouchTube window (see below) |
 | `COUCHTUBE_MPV_CONFIG` | `config/mpv` | mpv config directory, including scripts (relative to the backend working directory) |
 | `COUCHTUBE_DATA_DIR` | `$XDG_DATA_HOME/couchtube` or `~/.local/share/couchtube` | Private SQLite database and account Firefox profiles |
 | `RUST_LOG` | `couchtube=info` | Log level, e.g. `couchtube=debug,tower_http=debug` |
