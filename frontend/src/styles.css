@@ -314,3 +314,5 @@ button:disabled, select:disabled { opacity: 0.5; }
 .pairing-buttons { display: flex; gap: 1rem; }
 .pairing-buttons button { background: var(--surface); }
 .pairing .pairing-ok { color: #8fe3a8; font-weight: 600; }
+
+.card-reason { opacity: 0.75; font-style: italic; }

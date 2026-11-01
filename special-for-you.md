@@ -33,5 +33,5 @@ Discovery runs as **Guest** (no account cookies), decided 2026-11-01, so searche
 
 - [x] 1. Home button, For You screen, `seeds` table, `GET/POST /api/seeds`, `DELETE /api/seeds/{id}`. Type a theme or paste a link to add a seed; **D** removes the focused seed. Implemented 2026-11-01; not yet tried on screen.
 - [x] 2. Discovery from themes and seed channels (`src/discover.rs`, `Feeds::foryou`, `GET /api/feed/foryou?page=N`). Sources: the 6 newest themes (12 results each) and 6 newest channels (8 each). Score: `1/(1+0.15·position)` per source listing, summed, plus up to 0.5 for uploads under 30 days old. Cached 10 min, cleared when seeds change. **S** on a video seeds its channel. Implemented 2026-11-01; not yet tried with real yt-dlp on screen. Video seeds are stored but unused until step 3.
-- [ ] 3. Related videos, dismiss feedback, "because…" labels.
-- [ ] 4. Record the finished design in `plan.md` and `TODO.md`.
+- [x] 3. Video seeds become a search for the video's title (resolved once with yt-dlp, label updated to the title; the seed video itself is never suggested). **X** hides a video (`POST /api/foryou/dismiss`, `dismissed` table) and each dismissed video lowers its channel's others by 0.5, capped at 1.5. Cards show "Because: …" (the up to two sources that found it). Implemented 2026-11-01; not yet tried on screen.
+- [x] 4. Recorded in `plan.md` and `TODO.md`.

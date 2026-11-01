@@ -12,6 +12,8 @@ export type Video = {
   /** Upload time, Unix seconds (approximate). */
   timestamp?: number | null
   resume_position?: number
+  /** Why For You suggested it. */
+  reason?: string
 }
 
 export type Channel = {
@@ -136,6 +138,7 @@ export async function removeSeed(id: number) {
   if (!res.ok) throw new Error(body?.error ?? `request failed (${res.status})`)
   return body as Seed[]
 }
+export const dismiss = (id: string) => playback<{ status: string }>('foryou/dismiss', { id })
 export const queue = () => playback<Video[]>('queue')
 export const enqueue = (id: string) => playback<Video[]>('queue', { id })
 export const next = () => playback<{ playing: boolean }>('next', {})

@@ -9,6 +9,14 @@ Checklist for [`plan.md`](plan.md). Tick items as they're done; move finished se
 - [ ] HDMI-CEC: needs `cec-client` or a `/dev/cec*` device; check **Turn TV off** appears and works
 - [ ] Phone remote: pair a real phone, then pause, seek, volume, next, queue, pasted link; **Forget phones** locks it out
 
+## For You (implemented 2026-11-01, see [`special-for-you.md`](special-for-you.md), not tried on screen)
+
+- [ ] Home → For You: type a theme, check it appears as a seed and videos load (first load makes several yt-dlp calls)
+- [ ] **S** on a video seeds its channel; **D** removes a focused seed; **U** refreshes
+- [ ] Paste a video link: the seed's label turns into the video's title and similar videos appear
+- [ ] **X** hides a video; "Because: …" shows on cards
+- [ ] Tune scoring (weights in `src/discover.rs`) after a week of real use
+
 ## Known issues
 
 - [ ] mpv warnings (`client removed during hook handling`, `Packet corrupt`, `Invalid OBU length`, `Failed to parse temporal unit`) on AV1 1080p59.94 with VA-API. Seen twice (including a 40-minute video on 2026-10-25) and playback looked fine. Only switch `ytdl-format` away from AV1 (e.g. `[vcodec!^=av01]`) if playback visibly breaks; record the video ID if it recurs.

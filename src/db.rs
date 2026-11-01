@@ -68,6 +68,12 @@ impl Database {
                 created_at INTEGER NOT NULL DEFAULT (unixepoch()),
                 UNIQUE(profile_id, kind, value)
             );
+            CREATE TABLE IF NOT EXISTS dismissed (
+                profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                video_id TEXT NOT NULL, channel_id TEXT,
+                created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                PRIMARY KEY(profile_id, video_id)
+            );
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS remote_devices (
                 token_hash TEXT PRIMARY KEY, created_at INTEGER NOT NULL DEFAULT (unixepoch())
@@ -406,6 +412,47 @@ impl Database {
         .await
     }
 
+    pub async fn set_seed_label(&self, profile: &str, id: i64, label: &str) -> Result<()> {
+        let (profile, label) = (profile.to_owned(), label.to_owned());
+        self.with(move |db| {
+            db.execute("UPDATE seeds SET label=?3 WHERE profile_id=?1 AND id=?2", params![profile, id, label])?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// "Not interested": hides the video and counts against its channel.
+    pub async fn dismiss(&self, profile: &str, id: &str) -> Result<()> {
+        let (profile, id) = (profile.to_owned(), id.to_owned());
+        self.with(move |db| {
+            let channel: Option<String> = db
+                .query_row("SELECT json FROM videos WHERE profile_id=?1 AND video_id=?2", params![profile, id], |r| r.get::<_, String>(0))
+                .optional()?
+                .and_then(|json| serde_json::from_str::<Video>(&json).ok())
+                .and_then(|video| video.channel_id);
+            db.execute("INSERT OR IGNORE INTO dismissed(profile_id,video_id,channel_id) VALUES (?1,?2,?3)", params![profile, id, channel])?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Dismissed video ids, and how many videos of each channel were dismissed.
+    pub async fn dismissed(&self, profile: &str) -> Result<(std::collections::HashSet<String>, std::collections::HashMap<String, u32>)> {
+        let profile = profile.to_owned();
+        self.with(move |db| {
+            let mut statement = db.prepare("SELECT video_id, channel_id FROM dismissed WHERE profile_id=?1")?;
+            let mut ids = std::collections::HashSet::new();
+            let mut channels = std::collections::HashMap::new();
+            for row in statement.query_map([profile], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))? {
+                let (id, channel) = row?;
+                ids.insert(id);
+                if let Some(channel) = channel { *channels.entry(channel).or_insert(0) += 1; }
+            }
+            Ok((ids, channels))
+        })
+        .await
+    }
+
     pub async fn remove_seed(&self, profile: &str, id: i64) -> Result<()> {
         let profile = profile.to_owned();
         self.with(move |db| {
@@ -586,5 +633,21 @@ mod tests {
         assert_eq!(db.seeds(&alice.id).await.unwrap().len(), 2);
         db.remove_seed(&alice.id, seeds[0].id).await.unwrap();
         assert_eq!(db.seeds(&alice.id).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn dismissals_are_per_profile_and_count_channels() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        let alice = db.create("Alice", "#aabbcc").await.unwrap();
+        let bob = db.create("Bob", "#aabbcc").await.unwrap();
+        let mut video = Video::placeholder("aqz-KE-bpKQ");
+        video.channel_id = Some("UCSMOQeBJ2RAnuFungnQOxLg".into());
+        db.cache_put(&alice.id, "k", "[]".into(), 60, vec![video]).await.unwrap();
+        db.dismiss(&alice.id, "aqz-KE-bpKQ").await.unwrap();
+        db.dismiss(&alice.id, "aqz-KE-bpKQ").await.unwrap();
+        let (ids, channels) = db.dismissed(&alice.id).await.unwrap();
+        assert!(ids.contains("aqz-KE-bpKQ"));
+        assert_eq!(channels["UCSMOQeBJ2RAnuFungnQOxLg"], 1);
+        assert!(db.dismissed(&bob.id).await.unwrap().0.is_empty());
     }
 }

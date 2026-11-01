@@ -32,6 +32,9 @@ pub struct Video {
     pub timestamp: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_position: Option<f64>,
+    /// Why "For You" suggested this video; never stored with the video itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -78,6 +81,7 @@ impl Video {
             thumb: format!("https://i.ytimg.com/vi/{id}/hqdefault.jpg"),
             timestamp: None,
             resume_position: None,
+            reason: None,
         }
     }
 }
@@ -115,6 +119,22 @@ pub async fn mark_watched(id: &str, firefox: &Path) -> Result<()> {
     )
     .await?;
     Ok(())
+}
+
+/// Title and channel of one video (no download), used to turn a pasted video into a search.
+pub async fn video_info(id: &str) -> Result<(String, Option<String>)> {
+    if !is_video_id(id) {
+        bail!("invalid video id");
+    }
+    let json = run(
+        &format!("https://www.youtube.com/watch?v={id}"),
+        &["--no-flat-playlist", "--no-playlist", "--simulate"],
+        None,
+    )
+    .await?;
+    let info: serde_json::Value = serde_json::from_slice(&json).context("unexpected yt-dlp output")?;
+    let title = info["title"].as_str().context("video has no title")?.to_string();
+    Ok((title, info["channel_id"].as_str().map(str::to_string)))
 }
 
 /// Resolves a video the way playback would (no download); fails for private, deleted or blocked videos.
@@ -279,6 +299,7 @@ fn parse_playlist(json: &[u8]) -> Result<Playlist> {
                 timestamp: e.timestamp,
                 id,
                 resume_position: None,
+                reason: None,
             })
         })
         .collect();

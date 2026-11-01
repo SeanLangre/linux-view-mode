@@ -237,7 +237,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
     api.seeds().then((list) => { if (!cancelled) setSeeds(list) }, (err: Error) => notify(err.message))
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screen.kind, profile.id])
+  }, [screen.kind, profile.id, dataRevision])
 
   /** A pasted YouTube link becomes a video seed; anything else is a theme. */
   async function submitSeed() {
@@ -277,6 +277,17 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
 
   function focusedVideo(): Video | undefined {
     return focusedRow?.kind === 'videos' ? focusedRow.videos[focus.col] : undefined
+  }
+
+  /** "Not interested": hides the focused For You video and lowers its channel. */
+  async function dismissFocusedVideo() {
+    const video = focusedVideo()
+    if (!video || screen.kind !== 'foryou') return
+    try {
+      await api.dismiss(video.id)
+      setDataRevision((value) => value + 1)
+      notify('Hidden. You will see less like it.')
+    } catch (err) { notify((err as Error).message) }
   }
 
   /** Adds the focused video's channel to the seeds, so For You finds more from it. */
@@ -360,7 +371,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
         else if (e.key === 'Escape' || e.key === 'Backspace') {
           e.preventDefault()
           if (!starting) void stopVideo()
-        } else if (ARROWS[e.key] || ['Enter', '/', 'Home', 'c', 's'].includes(e.key)) {
+        } else if (ARROWS[e.key] || ['Enter', '/', 'Home', 'c', 's', 'x'].includes(e.key)) {
           e.preventDefault()
         }
         return
@@ -418,6 +429,9 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
           break
         case 'p':
           onSwitch()
+          break
+        case 'x':
+          void dismissFocusedVideo()
           break
         case 's':
           void seedFocusedChannel()
@@ -502,7 +516,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
       {(data.loading || data.loadingMore) && <SkeletonRow />}
       {!data.loading && !data.error && !data.rows.some((row) => row.kind === 'videos' && row.videos.length > 0) && (
         <p className="status">{screen.kind === 'home' ? 'Search for a video, or sign in to load your recommendations and subscriptions.'
-          : screen.kind === 'foryou' ? 'Type a theme above to start. Press S on any video to seed its channel. Pasted video links are saved for a later step.'
+          : screen.kind === 'foryou' ? 'Type a theme, paste a video link, or press S on any video to seed its channel.'
           : screen.kind === 'queue' ? 'Your queue is empty. Press A on a video to add it.'
           : screen.kind === 'feed' ? 'No videos here. Account feeds need a signed-in profile; press U to refresh.' : ''}</p>
       )}
@@ -525,6 +539,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
         {videoRowFocused && <span><kbd>A</kbd>Queue</span>}
         {videoRowFocused && <span><kbd>C</kbd>Channel</span>}
         {videoRowFocused && <span><kbd>S</kbd>Seed channel</span>}
+        {videoRowFocused && screen.kind === 'foryou' && <span><kbd>X</kbd>Not interested</span>}
         {(screen.kind === 'queue' || (screen.kind === 'foryou' && focusedRow?.kind === 'chips')) && <span><kbd>D</kbd>Remove</span>}
         <span><kbd>N</kbd>Next</span>
         <span><kbd>U</kbd>Refresh</span>
@@ -660,6 +675,7 @@ function VideoCard({ video, focused }: { video: Video; focused: boolean }) {
       </div>
       <div className="card-title">{video.title}</div>
       <div className="card-meta">{meta}</div>
+      {video.reason && <div className="card-meta card-reason">Because: {video.reason}</div>}
     </div>
   )
 }

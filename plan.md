@@ -12,6 +12,7 @@ How to run the code is in `README.md`; the working checklist is `TODO.md`.
 | 3 — Playback | Implemented; user test positive |
 | 4 — Profiles and sign-in | Implemented with phone pairing; user test positive |
 | 5 — Account feeds | Implemented; history sync verified for a first watch |
+| For You (own recommendations) | Implemented, see `special-for-you.md`; not tried on screen |
 | 6 — Deploy | Written (`deploy/`, exit to desktop) |
 | 7 — Polish | Not started |
 

@@ -6,6 +6,7 @@ use crate::{
     ytdlp::{self, Channel, Video},
 };
 use anyhow::{Context, Result};
+use std::collections::HashSet;
 
 #[derive(Clone)]
 pub struct Feeds(pub Database);
@@ -133,33 +134,65 @@ impl Feeds {
             return Ok(serde_json::from_str(&json)?);
         }
         let seeds = self.0.seeds(profile_id).await?;
-        let (themes, channels) = discover::pick_sources(&seeds);
+        let (themes, channels, videos) = discover::pick_sources(&seeds);
         let mut sources = Vec::new();
         let mut failed = 0;
+        let mut seed_videos = HashSet::new();
         for seed in themes {
             match self.search(guest, &seed.value, discover::THEME_LIMIT, refresh).await {
-                Ok(videos) => sources.push(videos),
+                Ok(videos) => sources.push(discover::Source { label: seed.label.clone(), videos }),
                 Err(err) => { failed += 1; tracing::warn!("For You theme search failed: {err:#}"); }
             }
         }
         for seed in channels {
             if !ytdlp::is_channel_id(&seed.value) { continue; }
             match self.channel(guest, &seed.value, 0, refresh).await {
-                Ok(channel) => sources.push(channel.videos.into_iter().take(discover::CHANNEL_LIMIT).collect()),
+                Ok(channel) => sources.push(discover::Source {
+                    label: seed.label.clone(),
+                    videos: channel.videos.into_iter().take(discover::CHANNEL_LIMIT).collect(),
+                }),
                 Err(err) => { failed += 1; tracing::warn!("For You channel failed: {err:#}"); }
+            }
+        }
+        // A video seed becomes a search for its title, so we find videos like it.
+        for seed in videos {
+            seed_videos.insert(seed.value.clone());
+            let title = if seed.label != seed.value {
+                seed.label.clone()
+            } else {
+                let info = {
+                    let _request = guest.gate.lock().await;
+                    ytdlp::video_info(&seed.value).await
+                };
+                match info {
+                    Ok((title, _)) => {
+                        self.0.set_seed_label(profile_id, seed.id, &title).await?;
+                        title
+                    }
+                    Err(err) => { failed += 1; tracing::warn!("For You video lookup failed: {err:#}"); continue; }
+                }
+            };
+            match self.search(guest, &discover::query_from_title(&title), discover::THEME_LIMIT, refresh).await {
+                Ok(found) => sources.push(discover::Source { label: format!("like {title}"), videos: found }),
+                Err(err) => { failed += 1; tracing::warn!("For You similar search failed: {err:#}"); }
             }
         }
         // Do not cache a list that is empty only because every request failed.
         if sources.is_empty() && failed > 0 {
             anyhow::bail!("every discovery request failed");
         }
-        let known = self.0.watched_ids(profile_id).await?;
+        let mut known = self.0.watched_ids(profile_id).await?;
+        let (dismissed, dismissed_channels) = self.0.dismissed(profile_id).await?;
+        known.extend(dismissed);
+        known.extend(seed_videos);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
-        let videos = discover::rank(sources, &known, now);
+        let videos = discover::rank(sources, &known, &dismissed_channels, now);
+        // The reason belongs to this list only, so the shared video table keeps none.
+        let stored = videos.iter().cloned().map(|mut v| { v.reason = None; v }).collect();
         self.0
-            .cache_put(profile_id, Self::FORYOU_KEY, serde_json::to_string(&videos)?, 600, videos.clone())
+            .cache_put(profile_id, Self::FORYOU_KEY, serde_json::to_string(&videos)?, 600, stored)
             .await?;
         Ok(videos)
     }
