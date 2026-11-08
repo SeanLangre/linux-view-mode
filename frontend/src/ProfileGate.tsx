@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as api from './api'
 import App from './App'
+import BuildVersion from './BuildVersion'
 
 type View = { kind: 'list' } | { kind: 'add' } | { kind: 'manage' | 'remove'; profile: api.Profile }
 const COLORS = ['#6288d9', '#c7799e', '#53a888', '#cb9a53', '#927bd4', '#dc7474']
@@ -256,6 +257,7 @@ export default function ProfileGate({ onService }: { onService: () => void }) {
       </>}
       {busy && <p className="status" role="status">Please wait…</p>}
       {error && <p className="status error" role="alert">{error}</p>}
+      <BuildVersion />
     </main>
   )
 }

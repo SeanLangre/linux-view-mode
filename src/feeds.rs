@@ -1,16 +1,67 @@
 //! Persistent per-profile cache. The account gate also coalesces concurrent requests.
+//!
+//! An answer is *fresh* for its time limit. After that it is still shown at once (for up to a
+//! week, `db::STALE_SECS`) while one background request per list fetches a new copy, so opening a
+//! screen never waits for yt-dlp unless nothing was ever saved. The pictures of every loaded list
+//! are saved on disk by `Thumbs`.
 use crate::{
     db::Database,
     discover,
     profiles::Account,
+    thumbs::Thumbs,
     ytdlp::{self, Channel, Video},
 };
 use anyhow::{Context, Result};
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex as StdMutex},
+    time::{Duration, Instant},
+};
 
+/// How long a list stays fresh, in seconds. Longer than the old limits, because an expired list is
+/// now shown at once and refreshed in the background rather than waited for.
+const FEED_FRESH: u32 = 1800;
+const HISTORY_FRESH: u32 = 300;
+const SEARCH_FRESH: u32 = 6 * 3600;
+const CHANNEL_FRESH: u32 = 3600;
+const FORYOU_FRESH: u32 = 1800;
+
+/// How long after an old copy was shown the screen is told to ask again (see `served_stale`).
+const STALE_WINDOW: Duration = Duration::from_secs(30);
+
+/// The database, the picture store, the background refreshes in flight (`profile\nkey`) and when
+/// each profile was last shown an old copy.
 #[derive(Clone)]
-pub struct Feeds(pub Database);
+pub struct Feeds(pub Database, Thumbs, Arc<StdMutex<HashSet<String>>>, Arc<StdMutex<HashMap<String, Instant>>>);
 impl Feeds {
+    pub fn new(db: Database, thumbs: Thumbs) -> Self {
+        Self(db, thumbs, Arc::default(), Arc::default())
+    }
+
+    fn note_stale(&self, profile: &str) {
+        self.3.lock().unwrap().insert(profile.to_owned(), Instant::now());
+    }
+
+    /// Runs `task` in the background unless the same list is already being refreshed.
+    fn refresh_later(&self, profile: &str, key: &str, task: impl std::future::Future<Output = ()> + Send + 'static) {
+        let id = format!("{profile}\n{key}");
+        if !self.2.lock().unwrap().insert(id.clone()) {
+            return;
+        }
+        let running = self.2.clone();
+        tokio::spawn(async move {
+            task.await;
+            running.lock().unwrap().remove(&id);
+        });
+    }
+
+    /// True if this profile was just shown an old copy of a list (within `STALE_WINDOW`), so a
+    /// new one is being fetched. The API tells the screen, which asks again a few seconds later.
+    /// Recorded when the old copy is shown, because the refresh can finish before the answer goes out.
+    pub fn served_stale(&self, profile: &str) -> bool {
+        self.3.lock().unwrap().get(profile).is_some_and(|at| at.elapsed() < STALE_WINDOW)
+    }
+
     pub async fn search(
         &self,
         account: &Account,
@@ -19,23 +70,32 @@ impl Feeds {
         refresh: bool,
     ) -> Result<Vec<Video>> {
         let key = format!("search:{limit}:{query}");
-        if !refresh && let Some(json) = self.0.cache_get(&account.profile.id, &key).await? {
+        if !refresh && let Some((json, fresh)) = self.0.cache_get_stale(&account.profile.id, &key).await? {
+            if !fresh {
+                self.note_stale(&account.profile.id);
+                let (feeds, account, key, query) = (self.clone(), account.clone(), key.clone(), query.to_owned());
+                self.refresh_later(&account.profile.id.clone(), &key.clone(), async move {
+                    let _request = account.gate.lock().await;
+                    if let Err(err) = feeds.load_search(&account, &key, &query, limit).await {
+                        tracing::debug!("background search refresh failed: {err:#}");
+                    }
+                });
+            }
             return Ok(serde_json::from_str(&json)?);
         }
         let _request = account.gate.lock().await;
         if !refresh && let Some(json) = self.0.cache_get(&account.profile.id, &key).await? {
             return Ok(serde_json::from_str(&json)?);
         }
+        self.load_search(account, &key, query, limit).await
+    }
+    /// Asks yt-dlp and stores the answer; the caller holds the account's gate.
+    async fn load_search(&self, account: &Account, key: &str, query: &str, limit: u32) -> Result<Vec<Video>> {
         let videos = ytdlp::search(query, limit, account.cookies()).await?;
         self.0
-            .cache_put(
-                &account.profile.id,
-                &key,
-                serde_json::to_string(&videos)?,
-                1800,
-                videos.clone(),
-            )
+            .cache_put(&account.profile.id, key, serde_json::to_string(&videos)?, SEARCH_FRESH, videos.clone())
             .await?;
+        self.1.prefetch(&videos);
         Ok(videos)
     }
     pub async fn channel(
@@ -46,23 +106,31 @@ impl Feeds {
         refresh: bool,
     ) -> Result<Channel> {
         let key = format!("channel:{id}:{page}");
-        if !refresh && let Some(json) = self.0.cache_get(&account.profile.id, &key).await? {
+        if !refresh && let Some((json, fresh)) = self.0.cache_get_stale(&account.profile.id, &key).await? {
+            if !fresh {
+                self.note_stale(&account.profile.id);
+                let (feeds, account, key, id) = (self.clone(), account.clone(), key.clone(), id.to_owned());
+                self.refresh_later(&account.profile.id.clone(), &key.clone(), async move {
+                    let _request = account.gate.lock().await;
+                    if let Err(err) = feeds.load_channel(&account, &key, &id, page).await {
+                        tracing::debug!("background channel refresh failed: {err:#}");
+                    }
+                });
+            }
             return Ok(serde_json::from_str(&json)?);
         }
         let _request = account.gate.lock().await;
         if !refresh && let Some(json) = self.0.cache_get(&account.profile.id, &key).await? {
             return Ok(serde_json::from_str(&json)?);
         }
+        self.load_channel(account, &key, id, page).await
+    }
+    async fn load_channel(&self, account: &Account, key: &str, id: &str, page: u32) -> Result<Channel> {
         let channel = ytdlp::channel(id, page, account.cookies()).await?;
         self.0
-            .cache_put(
-                &account.profile.id,
-                &key,
-                serde_json::to_string(&channel)?,
-                600,
-                channel.videos.clone(),
-            )
+            .cache_put(&account.profile.id, key, serde_json::to_string(&channel)?, CHANNEL_FRESH, channel.videos.clone())
             .await?;
+        self.1.prefetch(&channel.videos);
         Ok(channel)
     }
     pub async fn feed(
@@ -92,28 +160,37 @@ impl Feeds {
             };
         }
         let key = format!("feed:{kind}:{page}");
-        if !refresh && let Some(json) = self.0.cache_get(&account.profile.id, &key).await? {
+        if !refresh && let Some((json, fresh)) = self.0.cache_get_stale(&account.profile.id, &key).await? {
+            if !fresh {
+                self.note_stale(&account.profile.id);
+                let (feeds, account, key, kind) = (self.clone(), account.clone(), key.clone(), kind.to_owned());
+                self.refresh_later(&account.profile.id.clone(), &key.clone(), async move {
+                    let _request = account.gate.lock().await;
+                    if let Err(err) = feeds.load_feed(&account, &key, &kind, page).await {
+                        tracing::debug!("background feed refresh failed: {err:#}");
+                    }
+                });
+            }
             return Ok(serde_json::from_str(&json)?);
         }
         let _request = account.gate.lock().await;
         if !refresh && let Some(json) = self.0.cache_get(&account.profile.id, &key).await? {
             return Ok(serde_json::from_str(&json)?);
         }
-        let videos = ytdlp::feed(
-            kind,
-            page,
-            account.cookies().context("sign in to load this feed")?,
-        )
-        .await?;
+        self.load_feed(account, &key, kind, page).await
+    }
+    async fn load_feed(&self, account: &Account, key: &str, kind: &str, page: u32) -> Result<Vec<Video>> {
+        let videos = ytdlp::feed(kind, page, account.cookies().context("sign in to load this feed")?).await?;
         self.0
             .cache_put(
                 &account.profile.id,
-                &key,
+                key,
                 serde_json::to_string(&videos)?,
-                if kind == "history" { 120 } else { 600 },
+                if kind == "history" { HISTORY_FRESH } else { FEED_FRESH },
                 videos.clone(),
             )
             .await?;
+        self.1.prefetch(&videos);
         Ok(videos)
     }
     /// Cache key of a profile's ranked "For You" list.
@@ -134,9 +211,24 @@ impl Feeds {
     }
 
     async fn foryou_all(&self, profile_id: &str, guest: &Account, refresh: bool) -> Result<Vec<Video>> {
-        if !refresh && let Some(json) = self.0.cache_get(profile_id, Self::FORYOU_KEY).await? {
+        if !refresh && let Some((json, fresh)) = self.0.cache_get_stale(profile_id, Self::FORYOU_KEY).await? {
+            if !fresh {
+                self.note_stale(profile_id);
+                // Rebuild from the (cached) sources in the background; each of those refreshes itself the same way.
+                let (feeds, guest, profile) = (self.clone(), guest.clone(), profile_id.to_owned());
+                self.refresh_later(profile_id, Self::FORYOU_KEY, async move {
+                    if let Err(err) = feeds.build_foryou(&profile, &guest, false).await {
+                        tracing::debug!("background For You refresh failed: {err:#}");
+                    }
+                });
+            }
             return Ok(serde_json::from_str(&json)?);
         }
+        self.build_foryou(profile_id, guest, refresh).await
+    }
+
+    /// Builds the ranked list from the seeds. `refresh` also forces every source search.
+    async fn build_foryou(&self, profile_id: &str, guest: &Account, refresh: bool) -> Result<Vec<Video>> {
         let seeds = self.0.seeds(profile_id).await?;
         let hour = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -209,8 +301,9 @@ impl Feeds {
         // The reason belongs to this list only, so the shared video table keeps none.
         let stored = videos.iter().cloned().map(|mut v| { v.reason = None; v }).collect();
         self.0
-            .cache_put(profile_id, Self::FORYOU_KEY, serde_json::to_string(&videos)?, 600, stored)
+            .cache_put(profile_id, Self::FORYOU_KEY, serde_json::to_string(&videos)?, FORYOU_FRESH, stored)
             .await?;
+        self.1.prefetch(&videos);
         Ok(videos)
     }
 

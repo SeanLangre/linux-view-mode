@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import * as api from './api'
+import BuildVersion from './BuildVersion'
 import TwitchHome from './TwitchHome'
 import TwitchSignIn from './TwitchSignIn'
 
@@ -148,6 +149,7 @@ export default function TwitchGate({ onService }: { onService: () => void }) {
       </>}
       {busy && <p className="status" role="status">Please wait…</p>}
       {error && <p className="status error" role="alert">{error}</p>}
+      <BuildVersion />
     </main>
   )
 }

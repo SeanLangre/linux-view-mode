@@ -10,6 +10,7 @@ mod playback;
 mod player;
 mod profiles;
 mod remote;
+mod thumbs;
 mod twitch;
 mod ytdlp;
 
@@ -88,7 +89,9 @@ async fn main() -> Result<()> {
         Err(_) => DEFAULT_PAIR_PORT,
     };
     let pairing = pairing::Pairing::new(pair_port);
+    let thumbs_dir = data_dir.join("thumbs");
     let profiles = profiles::Profiles::open(data_dir, pairing.clone())?;
+    let thumbs = thumbs::Thumbs::new(thumbs_dir, profiles.db.clone())?;
     let playback = playback::Playback::new(player.clone(), profiles.db.clone());
     let remote_port = match std::env::var("COUCHTUBE_REMOTE_PORT") {
         Ok(p) => p.parse().context("COUCHTUBE_REMOTE_PORT must be a port number")?,
@@ -98,7 +101,8 @@ async fn main() -> Result<()> {
     let state = api::AppState {
         remote: remote.clone(),
         playback: playback.clone(),
-        feeds: feeds::Feeds(profiles.db.clone()),
+        feeds: feeds::Feeds::new(profiles.db.clone(), thumbs.clone()),
+        thumbs,
         profiles,
         transition: Default::default(),
         twitch: twitch::Source::from_env(),

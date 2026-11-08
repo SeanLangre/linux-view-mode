@@ -64,6 +64,11 @@ print(json.dumps({'entries':[{'id':'aqz-KE-bpKQ','title':'Account fixture','dura
                 time.sleep(0.05)
             raise AssertionError("timed out waiting for feed/playback state")
 
+        def raw(path):
+            """A GET that also returns the response headers."""
+            with client.open(f"http://127.0.0.1:{port}/api/{path}", timeout=5) as response:
+                return dict(response.headers), json.load(response)
+
         def calls():
             log = root / "calls.jsonl"
             return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
@@ -106,6 +111,18 @@ print(json.dumps({'entries':[{'id':'aqz-KE-bpKQ','title':'Account fixture','dura
                     assert count >= 1, kind
                     request(f"feed/{kind}")
                     assert len([c for c in calls() if c["args"][-1] == target]) == count, f"{kind} was not cached"
+                # An expired list is shown at once, marked stale, and refreshed once in the background.
+                target = targets["recommended"]
+                before = len([c for c in calls() if c["args"][-1] == target])
+                with sqlite3.connect(root / "data/couchtube.db") as db:
+                    db.execute("UPDATE feed_cache SET expires_at = unixepoch() - 100 WHERE cache_key = 'feed:recommended:0'")
+                headers, body = raw("feed/recommended")
+                assert body[0]["title"] == "Account fixture" and headers.get("x-cache") == "stale", headers
+                raw("feed/recommended"); raw("feed/recommended")
+                wait_for(lambda: len([c for c in calls() if c["args"][-1] == target]) == before + 1)
+                time.sleep(0.5)
+                assert len([c for c in calls() if c["args"][-1] == target]) == before + 1, "more than one background refresh"
+                assert request("thumb/not-a-video-id") == (404, {"error": "no thumbnail for this video"})
                 assert request("feed/recommended?refresh=true")[0] == 200
                 check = request("check")[1]
                 assert check["history"]["ok"] and check["videos"][0]["id"] == VIDEO and check["videos"][0]["video"] is True

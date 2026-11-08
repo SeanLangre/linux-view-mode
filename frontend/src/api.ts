@@ -29,8 +29,36 @@ export type Channel = {
 const CACHE_MS = 10 * 60 * 1000
 const cache = new Map<string, { at: number; promise: Promise<unknown> }>()
 
+// When the backend answers from an old saved copy (it says so in `x-cache: stale`) it is already
+// fetching a new one. Ask again a few seconds later and tell the open screen if the list changed.
+const refreshListeners = new Set<(path: string) => void>()
+export function onListRefreshed(listener: (path: string) => void) {
+  refreshListeners.add(listener)
+  return () => { refreshListeners.delete(listener) }
+}
+const REFRESH_AFTER_MS = 6000
+const REFRESH_TRIES = 3
+
+function refreshLater(path: string, cacheKey: string, scope: string, previous: string, attempt: number) {
+  window.setTimeout(async () => {
+    if (scope !== profileScope) return // another profile is showing now
+    try {
+      const res = await fetch(path, { cache: 'no-store' })
+      if (!res.ok) return
+      const body = await res.json()
+      const text = JSON.stringify(body)
+      if (text !== previous) {
+        cache.set(cacheKey, { at: Date.now(), promise: Promise.resolve(body) })
+        refreshListeners.forEach((listener) => listener(path))
+      }
+      if (res.headers.get('x-cache') === 'stale' && attempt < REFRESH_TRIES) refreshLater(path, cacheKey, scope, text, attempt + 1)
+    } catch { /* the next visit asks again */ }
+  }, REFRESH_AFTER_MS)
+}
+
 function get<T>(path: string, refresh = false): Promise<T> {
   const cacheKey = `${profileScope}:${path}`
+  const scope = profileScope
   const hit = cache.get(cacheKey)
   if (!refresh && hit && Date.now() - hit.at < CACHE_MS) return hit.promise as Promise<T>
   if (refresh) cache.delete(cacheKey)
@@ -39,6 +67,7 @@ function get<T>(path: string, refresh = false): Promise<T> {
   const promise = fetch(refresh ? `${path}${path.includes('?') ? '&' : '?'}refresh=true` : path).then(async (res) => {
     const body = await res.json().catch(() => null)
     if (!res.ok) throw new Error(body?.error ?? `request failed (${res.status})`)
+    if (res.headers?.get('x-cache') === 'stale') refreshLater(path, cacheKey, scope, JSON.stringify(body), 1)
     return body as T
   })
   promise.catch(() => { if (cache.get(cacheKey)?.promise === promise) cache.delete(cacheKey) })
@@ -77,8 +106,18 @@ async function playback<T>(path: string, body?: object): Promise<T> {
     : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   const data = await res.json().catch(() => null)
   if (!res.ok) throw new Error(data?.error ?? `request failed (${res.status})`)
+  // Feeds come through here (never cached in the browser). If the backend showed an old saved copy,
+  // ask again shortly and tell the open screen when the list changed.
+  if (body === undefined && res.headers?.get('x-cache') === 'stale') {
+    refreshLater(`/api/${path}`, `${profileScope}:/api/${path}`, profileScope, JSON.stringify(data), 1)
+  }
   return data as T
 }
+
+export type BuildVersion = { version: string; commit: string }
+let buildVersion: Promise<BuildVersion | null> | undefined
+/** Which build is running; asked once. `null` if the backend does not answer. */
+export const version = () => (buildVersion ??= playback<BuildVersion>('version').catch(() => null))
 
 export const play = (id: string, start?: number) => playback('play', { id, start })
 export const stop = () => playback('stop', {})

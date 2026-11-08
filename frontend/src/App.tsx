@@ -701,14 +701,16 @@ function VideoCard({ video, focused }: { video: Video; focused: boolean }) {
         {video.completed && <span className="resume-badge watched-badge">✓ Watched</span>}
         {video.resume_position !== undefined && <span className="resume-badge">Resume {formatDuration(video.resume_position)}</span>}
         <img
-          src={video.thumb}
+          // The backend keeps a copy on disk; if it has none, try YouTube's own address, then the default one.
+          src={`/api/thumb/${video.id}`}
           alt=""
           loading="lazy"
           onError={(e) => {
-            // Fall back once to the default thumbnail, then hide the broken image.
             const img = e.currentTarget
-            const fallback = `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`
-            if (img.src !== fallback) img.src = fallback
+            const step = Number(img.dataset.step ?? 0)
+            img.dataset.step = String(step + 1)
+            if (step === 0 && video.thumb) img.src = video.thumb
+            else if (step <= 1) img.src = `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`
             else img.style.visibility = 'hidden'
           }}
         />
@@ -746,9 +748,16 @@ function useScreenRows(screen: Screen, revision: number, refreshRequested: RefOb
   const [state, setState] = useState<State>()
   const [loadingMore, setLoadingMore] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  // Bumped when the backend finished replacing an old saved list that was shown first.
+  const [freshTick, setFreshTick] = useState(0)
+  const pageRef = useRef(0)
   const moreBusy = useRef(false)
   const screenRef = useRef(screen)
   screenRef.current = screen
+  pageRef.current = state?.page ?? 0
+
+  // A list that was shown from an old copy gets replaced by the fresh one, unless more pages were loaded below it.
+  useEffect(() => api.onListRefreshed(() => { if (pageRef.current === 0) setFreshTick((t) => t + 1) }), [])
 
   useEffect(() => {
     let cancelled = false
@@ -780,7 +789,7 @@ function useScreenRows(screen: Screen, revision: number, refreshRequested: RefOb
     }
     // `key` identifies the screen; the object itself changes identity on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, revision])
+  }, [key, revision, freshTick])
 
   const current = state?.key === key ? state : undefined
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import * as api from './api'
+import BuildVersion from './BuildVersion'
 import ProfileGate from './ProfileGate'
 import TwitchGate from './TwitchGate'
 
@@ -73,6 +74,7 @@ export default function ModeGate() {
         </button>)}
       </div>}
       <footer className="hints"><span><kbd>← →</kbd>Move</span><span><kbd>Enter</kbd>Choose</span></footer>
+      <BuildVersion />
       {error && <p className="status error" role="alert">{error}</p>}
     </main>
   )

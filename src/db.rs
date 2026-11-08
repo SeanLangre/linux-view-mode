@@ -35,6 +35,9 @@ pub struct Seed {
     pub label: String,
 }
 
+/// How long after it expired a cached list may still be shown (while a fresh one is fetched).
+pub const STALE_SECS: i64 = 7 * 86_400;
+
 #[derive(Clone)]
 pub struct Database(Arc<Mutex<Connection>>);
 
@@ -387,6 +390,28 @@ impl Database {
         .await
     }
 
+    /// Like `cache_get`, but an expired entry is returned too (for up to `STALE_SECS` after it
+    /// expired) with `false` for "still fresh". The caller shows it at once and refreshes it.
+    pub async fn cache_get_stale(&self, profile: &str, key: &str) -> Result<Option<(String, bool)>> {
+        let profile = profile.to_owned();
+        let key = key.to_owned();
+        self.with(move |db| Ok(db.query_row(
+            "SELECT json, expires_at > unixepoch() FROM feed_cache WHERE profile_id=?1 AND cache_key=?2 AND expires_at > unixepoch() - ?3",
+            params![profile, key, STALE_SECS],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?)),
+        ).optional()?)).await
+    }
+
+    /// The thumbnail address stored for a video (any profile's copy: it is the same picture).
+    pub async fn thumb_url(&self, id: &str) -> Result<Option<String>> {
+        let id = id.to_owned();
+        self.with(move |db| Ok(db.query_row(
+            "SELECT json_extract(json, '$.thumb') FROM videos WHERE video_id=?1 LIMIT 1",
+            [id],
+            |r| r.get::<_, Option<String>>(0),
+        ).optional()?.flatten())).await
+    }
+
     pub async fn cache_get(&self, profile: &str, key: &str) -> Result<Option<String>> {
         let profile = profile.to_owned();
         let key = key.to_owned();
@@ -409,8 +434,8 @@ impl Database {
                 tx.execute("INSERT INTO videos VALUES (?1,?2,?3) ON CONFLICT(profile_id,video_id) DO UPDATE SET json=excluded.json", params![profile, video.id, serde_json::to_string(&video)?])?;
             }
             tx.execute("INSERT INTO feed_cache VALUES (?1,?2,?3,unixepoch()+?4) ON CONFLICT(profile_id,cache_key) DO UPDATE SET json=excluded.json,expires_at=excluded.expires_at", params![profile,key,json,seconds])?;
-            // Bound search/channel cache growth, without retaining expired private feeds.
-            tx.execute("DELETE FROM feed_cache WHERE profile_id=?1 AND (expires_at <= unixepoch() OR (cache_key NOT LIKE 'feed:%' AND cache_key NOT IN (SELECT cache_key FROM feed_cache WHERE profile_id=?1 AND cache_key NOT LIKE 'feed:%' ORDER BY expires_at DESC LIMIT 100)))", [&profile])?;
+            // Bound search/channel cache growth. Expired entries stay for `STALE_SECS` so they can be shown while they refresh.
+            tx.execute("DELETE FROM feed_cache WHERE profile_id=?1 AND (expires_at <= unixepoch() - ?2 OR (cache_key NOT LIKE 'feed:%' AND cache_key NOT IN (SELECT cache_key FROM feed_cache WHERE profile_id=?1 AND cache_key NOT LIKE 'feed:%' ORDER BY expires_at DESC LIMIT 100)))", params![&profile, STALE_SECS])?;
             tx.commit()?;
             Ok(())
         }).await
@@ -676,6 +701,19 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn an_expired_answer_is_still_returned_but_marked_stale() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        db.cache_put("guest", "fresh", "[1]".into(), 600, vec![]).await.unwrap();
+        db.cache_put("guest", "old", "[2]".into(), 0, vec![]).await.unwrap();
+        assert_eq!(db.cache_get_stale("guest", "fresh").await.unwrap(), Some(("[1]".into(), true)));
+        assert_eq!(db.cache_get_stale("guest", "old").await.unwrap(), Some(("[2]".into(), false)));
+        assert_eq!(db.cache_get_stale("guest", "missing").await.unwrap(), None);
+        // The plain lookup still means "fresh only".
+        assert_eq!(db.cache_get("guest", "old").await.unwrap(), None);
+    }
+
     #[tokio::test]
     async fn a_video_can_be_marked_watched_and_unmarked() {
         let db = Database::open(Path::new(":memory:")).unwrap();

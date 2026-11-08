@@ -2,6 +2,27 @@
 
 Checklist for the [roadmap](docs/roadmap.md). Remove items once they are verified on screen.
 
+## Next: continue here (written 2026-11-09)
+
+Everything below was built on 2026-11-08/09 and is **uncommitted**. Suggested commits: (1) Twitch step 4 (sign-in, Following), (2) caching and thumbnails, (3) build version, (4) the test cleanup and the Firefox-player rewrite of `feeds_smoke.py`, (5) docs.
+
+**Caching and thumbnails: built and checked, but not documented yet**
+- [ ] Document it: README (the cache lines under "Watching, resume and queue" still say 10 min / 2 min / 30 min, and the API table needs `GET /api/thumb/<id>`, `GET /api/version` and the `x-cache: stale` header), `docs/accounts.md` (feed cache), `docs/design.md` (`thumbs.rs`, `build.rs`, the `thumbs/` data folder), `docs/roadmap.md`
+- [ ] What changed: lists are fresh for 30 min (history 5 min, searches 6 h, channels 1 h, For You 30 min); an expired list is still shown at once for up to 7 days while one background request replaces it (`Feeds::refresh_later`), and the screen swaps in the new list about 6 s later (`x-cache: stale`, `refreshLater` in `frontend/src/api.ts`). YouTube thumbnails are saved in `<data>/thumbs/` (served by `/api/thumb/<id>`, only from `i.ytimg.com`, at most 2000 files, trimmed to the newest 1500) and every loaded list prefetches its pictures
+- [ ] Decide: expired private feeds used to be purged on every write and are now kept up to 7 days (so they can be shown stale). `STALE_SECS` in `src/db.rs` sets it; lower it if that feels too long
+- [ ] Not cached on purpose: Twitch pictures (live previews change constantly); the browser-side memory cache is still cleared on a profile switch (the backend copy makes that cheap now)
+- [ ] On the TV: after the kiosk has been idle, Home opens instantly with the old lists and updates by itself; offline, saved lists and thumbnails still show; **U** forces a fresh list; check the size of `~/.local/share/couchtube/thumbs`
+
+**Build version**
+- [ ] Look at it on the TV: bottom-right of the service choice and both profile screens, `v0.1.0 · <commit>` (`-dirty` if tracked files had uncommitted changes, `unknown` if built outside a git checkout, e.g. from a tarball). Check that `deploy/install.sh` and the AppImage build (`packaging/build-appimage.sh`) show the commit. Bump `version` in `Cargo.toml` when you cut a release
+
+**Twitch: what is left**
+- [ ] Step 4 with a real login (the checklist is in the section below)
+- [ ] Step 5: channel screen with VODs and clips (`video=<id>` in the embed), VOD resume in `progress`, queue for VODs
+- [ ] Step 6: chat pane (`t`) and the phone remote's Twitch support
+- [ ] Step 7 (only if uBlock Origin does not cope with Twitch's ads on the real TV): streamlink fallback
+- [ ] Add a short note about the Twitch sign-in to `docs/phone-signin-encryption.md` (the phone's first step presses Tab, and the sealed `hello` carries the site name)
+
 ## Phase 7 — Polish (implemented 2026-10-25, not tried on the real TV)
 
 - [ ] HDMI-CEC: needs `cec-client` or a `/dev/cec*` device; check **Turn TV off** appears and works

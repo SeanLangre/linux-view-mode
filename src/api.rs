@@ -24,11 +24,12 @@ pub struct AppState {
     pub profiles: Profiles,
     pub remote: crate::remote::Remote,
     pub twitch: crate::twitch::Source,
+    pub thumbs: crate::thumbs::Thumbs,
     pub transition: Arc<Mutex<()>>,
 }
 
 use crate::player::Status;
-use crate::ytdlp::{self, Channel, Video};
+use crate::ytdlp::{self, Video};
 
 const DEFAULT_LIMIT: u32 = 24;
 const MAX_LIMIT: u32 = 50;
@@ -68,6 +69,8 @@ pub fn router(state: AppState) -> Router {
         .route("/next", post(next))
         .route("/search", get(search))
         .route("/channel/{id}", get(channel))
+        .route("/thumb/{id}", get(thumb))
+        .route("/version", get(version))
         .merge(crate::twitch::routes())
         // Without this, unknown /api paths would fall through to the frontend's index.html.
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "no such endpoint") })
@@ -91,6 +94,39 @@ pub async fn require_local_host(
     } else {
         ApiError::new(StatusCode::FORBIDDEN, "unexpected Host header").into_response()
     }
+}
+
+/// A YouTube thumbnail, saved on disk the first time it is needed. Browsers keep it for a week.
+async fn thumb(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match state.thumbs.get(&id).await {
+        Ok((bytes, kind)) => (
+            [
+                (axum::http::header::CONTENT_TYPE, kind),
+                (axum::http::header::CACHE_CONTROL, "public, max-age=604800"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(err) => {
+            tracing::debug!(video_id=%id, "no thumbnail: {err:#}");
+            ApiError::new(StatusCode::NOT_FOUND, "no thumbnail for this video").into_response()
+        }
+    }
+}
+
+/// Marks a list that was served from an old copy while a new one is fetched, so the screen asks again.
+fn stale_marker<T: serde::Serialize>(stale: bool, body: T) -> Response {
+    let mut response = Json(body).into_response();
+    if stale {
+        response.headers_mut().insert("x-cache", axum::http::HeaderValue::from_static("stale"));
+    }
+    response
+}
+
+/// Which build is running: the package version and the git commit it was built from
+/// (`-dirty` when tracked files had uncommitted changes).
+async fn version() -> Json<serde_json::Value> {
+    Json(json!({ "version": env!("CARGO_PKG_VERSION"), "commit": env!("COUCHTUBE_COMMIT") }))
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -117,7 +153,7 @@ struct PageQuery {
 async fn search(
     State(state): State<AppState>,
     params: Result<Query<SearchParams>, QueryRejection>,
-) -> Result<Json<Vec<Video>>, ApiError> {
+) -> Result<Response, ApiError> {
     let Query(params) = params
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "limit must be a positive whole number"))?;
     let query = ytdlp::clean_query(&params.q)
@@ -137,14 +173,14 @@ async fn search(
             ApiError::new(StatusCode::BAD_GATEWAY, "search failed, try again")
         })?;
     annotate(&state, &account.profile.id, &mut videos).await;
-    Ok(Json(videos))
+    Ok(stale_marker(state.feeds.served_stale(&account.profile.id), videos))
 }
 
 async fn channel(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(query): Query<PageQuery>,
-) -> Result<Json<Channel>, ApiError> {
+) -> Result<Response, ApiError> {
     if !ytdlp::is_channel_id(&id) {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid channel id"));
     }
@@ -162,7 +198,7 @@ async fn channel(
             ApiError::new(StatusCode::BAD_GATEWAY, "could not load channel, try again")
         })?;
     annotate(&state, &account.profile.id, &mut channel.videos).await;
-    Ok(Json(channel))
+    Ok(stale_marker(state.feeds.served_stale(&account.profile.id), channel))
 }
 
 /// An error sent to the frontend as `{"error": "..."}`.
@@ -559,7 +595,7 @@ async fn feed(
     State(state): State<AppState>,
     Path(kind): Path<String>,
     Query(query): Query<PageQuery>,
-) -> Result<Json<Vec<Video>>, ApiError> {
+) -> Result<Response, ApiError> {
     if kind == "foryou" {
         let (account, guest) = {
             let _transition = state.transition.lock().await;
@@ -576,7 +612,9 @@ async fn feed(
                 ApiError::new(StatusCode::BAD_GATEWAY, "could not find videos right now; try again")
             })?;
         annotate(&state, &account.profile.id, &mut videos).await;
-        return Ok(Json(videos));
+        // The sources of For You are cached under Guest, so a refresh of those counts too.
+        let stale = state.feeds.served_stale(&account.profile.id) || state.feeds.served_stale("guest");
+        return Ok(stale_marker(stale, videos));
     }
     if kind != "continue" && kind != "local" && ytdlp::feed_target(&kind).is_none() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "unknown feed"));
@@ -597,7 +635,7 @@ async fn feed(
             )
         })?;
     annotate(&state, &account.profile.id, &mut videos).await;
-    Ok(Json(videos))
+    Ok(stale_marker(state.feeds.served_stale(&account.profile.id), videos))
 }
 
 /// Adds this profile's started/finished state to a list; a failure only hides the badges.
