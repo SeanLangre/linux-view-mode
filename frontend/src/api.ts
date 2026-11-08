@@ -151,7 +151,8 @@ const twitchQuery = (params: Record<string, string | undefined>, refresh: boolea
   const text = query.toString()
   return text ? `?${text}` : ''
 }
-export const twitchStatus = () => playback<{ configured: boolean }>('twitch/status')
+/** `unofficial` (Twitch's web API, no registration) or `official` (Helix with a registered application). */
+export const twitchStatus = () => playback<{ source: 'official' | 'unofficial' }>('twitch/status')
 export const twitchCategories = (cursor?: string, refresh = false) =>
   playback<TwitchPage<TwitchCategory>>(`twitch/categories${twitchQuery({ cursor }, refresh)}`)
 /** Live streams of one category, or the most watched on all of Twitch. */

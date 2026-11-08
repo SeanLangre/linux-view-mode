@@ -1,5 +1,5 @@
-//! Twitch mode (see `docs/twitch-mode.md`). So far: the saved mode and the separate Twitch
-//! profiles. Twitch profiles are their own list: they share no ids, caches or settings with the
+//! Twitch mode (see `docs/twitch-mode.md`): the saved mode, the separate Twitch profiles and
+//! browsing. Twitch profiles are their own list: they share no ids, caches or settings with the
 //! YouTube profiles, so removing one never touches the other.
 use axum::{
     Json, Router,
@@ -13,9 +13,55 @@ use serde_json::json;
 use crate::{
     api::{ApiError, AppState, internal},
     db::TwitchProfile,
-    helix::{self, Category, Channel, Page, Stream},
+    gql::Gql,
+    helix::{self, Category, Channel, Helix, Page, Stream},
     profiles,
 };
+
+/// Where Twitch data comes from. The **unofficial** web API needs no registration and is the
+/// default; setting `COUCHTUBE_TWITCH_CLIENT_ID` and `COUCHTUBE_TWITCH_CLIENT_SECRET` switches to
+/// the **official** Helix API. The routes and the frontend are the same for both.
+#[derive(Clone)]
+pub enum Source {
+    Official(Helix),
+    Unofficial(Gql),
+}
+
+impl Source {
+    pub fn from_env() -> Self {
+        let official = Helix::from_env();
+        if official.configured() { Self::Official(official) } else { Self::Unofficial(Gql::from_env()) }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Official(_) => "official",
+            Self::Unofficial(_) => "unofficial",
+        }
+    }
+
+    pub async fn top_categories(&self, cursor: Option<&str>, refresh: bool) -> anyhow::Result<Page<Category>> {
+        match self {
+            Self::Official(helix) => helix.top_categories(cursor, refresh).await,
+            Self::Unofficial(gql) => gql.top_categories(cursor, refresh).await,
+        }
+    }
+
+    pub async fn streams(&self, game_id: Option<&str>, cursor: Option<&str>, refresh: bool) -> anyhow::Result<Page<Stream>> {
+        match self {
+            Self::Official(helix) => helix.streams(game_id, cursor, refresh).await,
+            Self::Unofficial(gql) => gql.streams(game_id, cursor, refresh).await,
+        }
+    }
+
+    pub async fn search_channels(&self, text: &str, cursor: Option<&str>, refresh: bool) -> anyhow::Result<Page<Channel>> {
+        match self {
+            Self::Official(helix) => helix.search_channels(text, cursor, refresh).await,
+            // The unofficial search has no paging.
+            Self::Unofficial(gql) => gql.search_channels(text, refresh).await,
+        }
+    }
+}
 
 pub const MODES: [&str; 2] = ["youtube", "twitch"];
 
@@ -31,10 +77,10 @@ pub fn routes() -> Router<AppState> {
         .route("/twitch/search", get(search))
 }
 
-/// `{configured}`: whether a Twitch client id and secret are set. The Twitch screens show how to
-/// set them up when this is false.
+/// `{source}`: `unofficial` (Twitch's web API, no registration) or `official` (Helix, with a
+/// registered application).
 async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
-    Json(json!({ "configured": state.twitch.configured() }))
+    Json(json!({ "source": state.twitch.name() }))
 }
 
 #[derive(Deserialize)]
@@ -46,14 +92,8 @@ struct Browse {
     refresh: bool,
 }
 
-fn browse(params: Result<Query<Browse>, QueryRejection>, state: &AppState) -> Result<Browse, ApiError> {
+fn browse(params: Result<Query<Browse>, QueryRejection>) -> Result<Browse, ApiError> {
     let Query(params) = params.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid query"))?;
-    if !state.twitch.configured() {
-        return Err(ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Twitch is not set up: set COUCHTUBE_TWITCH_CLIENT_ID and COUCHTUBE_TWITCH_CLIENT_SECRET",
-        ));
-    }
     if params.cursor.as_deref().is_some_and(|c| !helix::valid_cursor(c)) {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid cursor"));
     }
@@ -74,7 +114,7 @@ async fn categories(
     State(state): State<AppState>,
     params: Result<Query<Browse>, QueryRejection>,
 ) -> Result<Json<Page<Category>>, ApiError> {
-    let params = browse(params, &state)?;
+    let params = browse(params)?;
     let page = state.twitch.top_categories(params.cursor.as_deref(), params.refresh).await.map_err(upstream("categories"))?;
     Ok(Json(page))
 }
@@ -84,7 +124,7 @@ async fn streams(
     State(state): State<AppState>,
     params: Result<Query<Browse>, QueryRejection>,
 ) -> Result<Json<Page<Stream>>, ApiError> {
-    let params = browse(params, &state)?;
+    let params = browse(params)?;
     let page = state
         .twitch
         .streams(params.game_id.as_deref(), params.cursor.as_deref(), params.refresh)
@@ -97,7 +137,7 @@ async fn search(
     State(state): State<AppState>,
     params: Result<Query<Browse>, QueryRejection>,
 ) -> Result<Json<Page<Channel>>, ApiError> {
-    let params = browse(params, &state)?;
+    let params = browse(params)?;
     let text = params
         .q
         .as_deref()

@@ -23,6 +23,31 @@ pub const TTL_CATEGORIES: Duration = Duration::from_secs(600);
 pub const TTL_LIVE: Duration = Duration::from_secs(60);
 const CACHE_LIMIT: usize = 200;
 
+/// A small in-memory cache of answers, shared by the official and unofficial clients.
+pub struct Cache(StdMutex<HashMap<String, (Instant, Value)>>);
+
+impl Cache {
+    pub fn new() -> Self {
+        Self(StdMutex::new(HashMap::new()))
+    }
+
+    pub fn get(&self, key: &str, ttl: Duration) -> Option<Value> {
+        let map = self.0.lock().unwrap();
+        map.get(key).filter(|(stored, _)| stored.elapsed() < ttl).map(|(_, value)| value.clone())
+    }
+
+    pub fn put(&self, key: String, value: Value) {
+        let mut map = self.0.lock().unwrap();
+        if map.len() >= CACHE_LIMIT {
+            map.retain(|_, (stored, _)| stored.elapsed() < TTL_CATEGORIES);
+            if map.len() >= CACHE_LIMIT {
+                map.clear();
+            }
+        }
+        map.insert(key, (Instant::now(), value));
+    }
+}
+
 struct Credentials {
     id: String,
     secret: String,
@@ -40,7 +65,7 @@ struct Inner {
     token: Mutex<Option<Token>>,
     /// One Twitch request at a time, like the one-yt-dlp-at-a-time rule on the YouTube side.
     gate: Mutex<()>,
-    cache: StdMutex<HashMap<String, (Instant, Value)>>,
+    cache: Cache,
 }
 
 #[derive(Clone)]
@@ -48,12 +73,12 @@ pub struct Helix(Arc<Inner>);
 
 /// Twitch ids and secrets are plain alphanumerics. Anything else is refused, so a value can never
 /// break out of the curl config it is written into.
-fn valid_credential(value: &str) -> bool {
+pub(crate) fn valid_credential(value: &str) -> bool {
     (10..=64).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
 /// A base URL for tests and mirrors: scheme and host only use characters that are safe in a curl config.
-fn valid_url(value: &str) -> bool {
+pub(crate) fn valid_url(value: &str) -> bool {
     (value.starts_with("https://") || value.starts_with("http://127.0.0.1:"))
         && value.bytes().all(|b| b.is_ascii_alphanumeric() || b"-._~:/".contains(&b))
 }
@@ -68,7 +93,7 @@ impl Helix {
             (Some(id), Some(secret)) if valid_credential(&id) && valid_credential(&secret) => Some(Credentials { id, secret }),
             (None, None) => None,
             _ => {
-                tracing::warn!("Twitch client id/secret are missing one of the pair or are not 10-64 letters and digits; Twitch mode is off");
+                tracing::warn!("Twitch client id/secret: one of the pair is missing or not 10-64 letters and digits; using the unofficial Twitch API instead");
                 None
             }
         };
@@ -85,7 +110,7 @@ impl Helix {
             token_url,
             token: Mutex::new(None),
             gate: Mutex::new(()),
-            cache: StdMutex::new(HashMap::new()),
+            cache: Cache::new(),
         }))
     }
 
@@ -98,10 +123,8 @@ impl Helix {
         let credentials = self.0.credentials.as_ref().context("Twitch is not set up")?;
         let url = format!("{}/{}{}", self.0.api, path, query_string(query));
         if !refresh {
-            if let Some((stored, value)) = self.0.cache.lock().unwrap().get(&url) {
-                if stored.elapsed() < ttl {
-                    return Ok(value.clone());
-                }
+            if let Some(value) = self.0.cache.get(&url, ttl) {
+                return Ok(value);
             }
         }
         let _gate = self.0.gate.lock().await;
@@ -120,14 +143,7 @@ impl Helix {
             }
         }
         let value = value.context("Twitch refused the access token")?;
-        let mut cache = self.0.cache.lock().unwrap();
-        if cache.len() >= CACHE_LIMIT {
-            cache.retain(|_, (stored, _)| stored.elapsed() < TTL_CATEGORIES);
-            if cache.len() >= CACHE_LIMIT {
-                cache.clear();
-            }
-        }
-        cache.insert(url, (Instant::now(), value.clone()));
+        self.0.cache.put(url, value.clone());
         Ok(value)
     }
 
@@ -212,7 +228,7 @@ fn token_config(url: &str, credentials: &Credentials) -> String {
 }
 
 /// Runs curl with its config on stdin; returns the HTTP status and the body.
-async fn curl(config: String) -> Result<(u16, String)> {
+pub(crate) async fn curl(config: String) -> Result<(u16, String)> {
     // `-q` first: ignore any ~/.curlrc.
     let mut child = Command::new("curl")
         .args(["-q", "-K", "-"])
@@ -238,7 +254,7 @@ async fn curl(config: String) -> Result<(u16, String)> {
 }
 
 /// Twitch's error text, for the log only.
-fn message(body: &str) -> String {
+pub(crate) fn message(body: &str) -> String {
     serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|v| v["message"].as_str().map(str::to_owned))
@@ -282,17 +298,17 @@ pub struct Channel {
     pub thumb: String,
 }
 
-fn text(value: &Value, key: &str) -> String {
+pub(crate) fn text(value: &Value, key: &str) -> String {
     value[key].as_str().unwrap_or_default().to_owned()
 }
 
 /// Helix image URLs carry `{width}x{height}` placeholders.
-fn sized(url: &str, width: u32, height: u32) -> String {
+pub(crate) fn sized(url: &str, width: u32, height: u32) -> String {
     url.replace("{width}", &width.to_string()).replace("{height}", &height.to_string())
 }
 
 /// Only images from Twitch's own host are passed to the page.
-fn image(url: String) -> String {
+pub(crate) fn image(url: String) -> String {
     if url.starts_with("https://static-cdn.jtvnw.net/") || url.starts_with("https://static-cdn.jtvnw.net:") { url } else { String::new() }
 }
 

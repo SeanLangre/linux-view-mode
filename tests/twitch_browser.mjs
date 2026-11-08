@@ -101,7 +101,7 @@ try {
   // Categories, then one category's streams; going back restores the focused card.
   await key('ArrowRight')
   await key('Enter')
-  await wait("document.querySelectorAll('.tw-card').length === 2")
+  await wait("document.querySelectorAll('.tw-card').length === 24")
   await shot('categories')
   await key('ArrowRight')
   assert.match(await focused(), /Grand Theft Auto V/)
@@ -111,6 +111,12 @@ try {
   await wait("document.querySelector('.page-title')?.textContent === 'Categories'")
   await wait("document.activeElement?.textContent.includes('Grand Theft Auto V')")
   await wait("[...document.querySelectorAll('button')].some(b => b.textContent === 'Load more')")
+  // Load more shows the next cards and puts the focus on the first new one.
+  await evaluate("[...document.querySelectorAll('button')].find(b => b.textContent === 'Load more').focus()")
+  await key('Enter')
+  await wait("document.querySelectorAll('.tw-card').length === 26")
+  await wait("document.activeElement?.textContent.includes('Game 24')")
+  await wait("![...document.querySelectorAll('button')].some(b => b.textContent === 'Load more')")
   await key('Escape')
   await wait("document.querySelector('.page-title')?.textContent === 'Twitch'")
 

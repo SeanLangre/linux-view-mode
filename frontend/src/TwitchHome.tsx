@@ -59,7 +59,6 @@ const titleOf = (screen: Screen) =>
 /** The Twitch screens after a profile is chosen: Home, Top live, Categories, a category, Search. */
 export default function TwitchHome({ profile, onProfile, onService }: { profile: api.TwitchProfile; onProfile: () => void; onService: () => void }) {
   const [stack, setStack] = useState<Entry[]>([{ screen: { kind: 'home' }, focus: 0 }])
-  const [configured, setConfigured] = useState<boolean | null>(null)
   const [cards, setCards] = useState<Card[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -78,13 +77,9 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
   const key = screenKey(screen, query)
   const isGrid = screen.kind !== 'home'
 
-  useEffect(() => {
-    api.twitchStatus().then((s) => setConfigured(s.configured), () => setConfigured(false))
-  }, [])
-
   // Load the first page whenever the screen (or the search text, or a refresh) changes.
   useEffect(() => {
-    if (!isGrid || !configured) { setCards([]); setCursor(null); return }
+    if (!isGrid) { setCards([]); setCursor(null); return }
     const mine = ++request.current
     const refresh = refreshNext.current
     refreshNext.current = false
@@ -101,18 +96,17 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
       .finally(() => { if (request.current === mine) setLoading(false) })
     // `entry.focus` is only the position to return to; it must not reload the screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, configured, revision])
+  }, [key, revision])
 
   // Focus: the search box when it opens, otherwise the remembered card.
   useEffect(() => {
-    if (!configured) return
     if (screen.kind === 'search' && !query) { panel.current?.querySelector<HTMLInputElement>('input')?.focus(); return }
     const buttons = panel.current?.querySelectorAll<HTMLButtonElement>('[data-nav]:not(:disabled)')
     if (!isGrid) buttons?.[entry.focus]?.focus()
     else if (focusAfter.current !== null) { buttons?.[focusAfter.current]?.focus(); focusAfter.current = null }
     // Focus only when the screen or its cards change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, configured, cards.length, loading])
+  }, [key, cards.length, loading])
 
   const navButtons = () => Array.from(panel.current?.querySelectorAll<HTMLButtonElement>('[data-nav]:not(:disabled)') ?? [])
   const focusIndex = () => Math.max(0, navButtons().indexOf(document.activeElement as HTMLButtonElement))
@@ -178,22 +172,13 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
       <header className="top"><div className="brand"><span className="logo" style={{ color: '#9146ff' }}>▶</span> CouchTube · Twitch</div>
         <div className="profile-label" style={{ borderColor: profile.color }}>{profile.name}</div></header>
       <h1 className="page-title">{titleOf(screen)}</h1>
-      {configured === null && <p className="status">Loading…</p>}
-      {configured === false && <div className="status" role="status">
-        <p>Twitch is not set up yet. Register a free application at <strong>dev.twitch.tv/console</strong> (OAuth redirect URL: <code>http://localhost</code>, category: Application Integration), then start CouchTube with</p>
-        <p><code>COUCHTUBE_TWITCH_CLIENT_ID</code> and <code>COUCHTUBE_TWITCH_CLIENT_SECRET</code> set to the application’s client id and secret.</p>
-        <div className="profile-actions">
-          <button data-nav onClick={onProfile}>Switch profile</button>
-          <button data-nav onClick={onService}>Switch service</button>
-        </div>
-      </div>}
-      {configured && screen.kind === 'home' && <div className="profile-grid">
+      {screen.kind === 'home' && <div className="profile-grid">
         {HOME_MENU.map((item) => <button type="button" data-nav key={item.label} className="profile-card" onClick={() => push(item.screen)}>
           <strong>{item.label}</strong><span className="profile-note">{item.note}</span></button>)}
         <button type="button" data-nav className="profile-card" onClick={onService}>
           <strong>Switch service</strong><span className="profile-note">Back to YouTube or Twitch</span></button>
       </div>}
-      {configured && screen.kind === 'search' && <form className="profile-form" onSubmit={(event) => {
+      {screen.kind === 'search' && <form className="profile-form" onSubmit={(event) => {
         event.preventDefault()
         const text = draft.trim()
         if (text) setQuery(text)
@@ -201,7 +186,7 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
         <input className="search-box" value={draft} maxLength={100} placeholder="Search channels" aria-label="Search channels"
           onChange={(event) => setDraft(event.target.value)} />
       </form>}
-      {configured && isGrid && <>
+      {isGrid && <>
         {error && <p className="status error" role="alert">{error} <button data-nav onClick={() => setRevision((r) => r + 1)}>Retry</button></p>}
         {loading && cards.length === 0 && <p className="status">Loading…</p>}
         {!loading && !error && cards.length === 0 && (screen.kind !== 'search' || query) &&
@@ -220,8 +205,8 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
       </>}
       {note && <p className="status" role="status">{note}</p>}
       <footer className="hints"><span><kbd>← ↑ ↓ →</kbd>Move</span><span><kbd>Enter</kbd>Open</span><span><kbd>Esc</kbd>Back</span>
-        {configured && screen.kind !== 'search' && <span><kbd>/</kbd>Search</span>}
-        {configured && isGrid && <span><kbd>U</kbd>Refresh</span>}
+        {screen.kind !== 'search' && <span><kbd>/</kbd>Search</span>}
+        {isGrid && <span><kbd>U</kbd>Refresh</span>}
         <span><kbd>P</kbd>Profiles</span></footer>
     </main>
   )

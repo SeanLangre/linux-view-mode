@@ -27,12 +27,11 @@ Checklist for the [roadmap](docs/roadmap.md). Remove items once they are verifie
 - [ ] Twitch: add a profile, pick it, switch profile, remove it with **D** (Guest can't be removed); YouTube profiles are not affected
 - [ ] Restart the backend: the last mode and each service's active profile are remembered
 
-## Twitch mode, step 2 (implemented 2026-11-08; tested against a fake Twitch only, never the real one)
+## Twitch mode, step 2 (implemented 2026-11-08, see [`docs/twitch-mode.md`](docs/twitch-mode.md); checked against the real Twitch from a headless browser, not yet on the TV)
 
-- [ ] Register a Twitch application, start CouchTube with `COUCHTUBE_TWITCH_CLIENT_ID` and `COUCHTUBE_TWITCH_CLIENT_SECRET`, and check Twitch Home loads (without them it should explain how to set up)
-- [ ] Top live streams, Categories (6 per row, box art shows), a category's streams, Search: real thumbnails load, viewer counts and LIVE badges look right
-- [ ] Load more works on a real category list; `u` refreshes; Esc returns with the focus on the card you left
-- [ ] Check the thumbnails host: images come from `static-cdn.jtvnw.net` and are dropped otherwise, so a different host would show blank cards
+- [ ] On the TV: Top live streams, Categories (6 per row), a category's streams and Search load with real pictures; Load more works; `u` refreshes; Esc returns with the focus on the card you left
+- [ ] Watch for the unofficial source breaking (it is not a supported API): if the screens show "could not reach Twitch", read the backend log; the client id repairs itself, but a schema or integrity-check change needs `src/gql.rs` updated
+- [ ] **Register a Twitch application** (see "Registering later" in the doc) before step 4 (Following); then check the official source against the real Helix API: top games, streams with `game_id`, search, Load more with cursors, token renewal
 
 ## Known issues
 

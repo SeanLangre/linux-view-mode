@@ -68,7 +68,8 @@ src/
   remote.rs       phone remote (port 7880, off until switched on) and remote.html
   cec.rs          HDMI-CEC TV power
   twitch.rs       Twitch mode routes: saved mode, Twitch profiles, browsing (see [`twitch-mode.md`](twitch-mode.md))
-  helix.rs        read-only Twitch Helix client (curl, app token, cache)
+  gql.rs          Twitch's unofficial web API client (the default source, no registration)
+  helix.rs        official Twitch Helix client (used once a Twitch application is registered)
   vendor/         nacl.min.js (tweetnacl, inlined into the phone page)
   db.rs           SQLite profiles, progress, metadata, queue and per-profile cache
 frontend/         Vite + React + TS
