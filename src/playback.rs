@@ -61,6 +61,13 @@ impl Playback {
         });
         Ok(())
     }
+    /// Watch a live Twitch channel. Live streams have no position to resume, no watched sync and no
+    /// queue, so no session is kept: only the player runs.
+    pub async fn play_twitch(&self, login: &str) -> Result<()> {
+        self.stop().await?;
+        self.player.play_twitch(login).await?;
+        Ok(())
+    }
     pub async fn stop(&self) -> Result<()> {
         let status = self.player.status().await?;
         self.save(&status, true, false).await?;

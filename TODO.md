@@ -33,6 +33,16 @@ Checklist for the [roadmap](docs/roadmap.md). Remove items once they are verifie
 - [ ] Watch for the unofficial source breaking (it is not a supported API): if the screens show "could not reach Twitch", read the backend log; the client id repairs itself, but a schema or integrity-check change needs `src/gql.rs` updated
 - [ ] **Register a Twitch application** (see "Registering later" in the doc) before step 4 (Following); then check the official source against the real Helix API: top games, streams with `game_id`, search, Load more with cursors, token renewal
 
+## Twitch mode, step 3: watching (implemented 2026-11-08, see [`docs/twitch-mode.md`](docs/twitch-mode.md); played in Firefox 159 against the real Twitch, not yet on the TV)
+
+- [ ] Enter on a live stream: the Twitch player covers the kiosk window and starts by itself, with sound (the kiosk profile's autoplay settings apply; restart the kiosk once after updating so they do)
+- [ ] **Ads with uBlock Origin:** watch a channel as a non-subscriber for a few minutes: are ads blocked, or does the player show a blank/black screen? This decides whether step 7 (streamlink) is needed
+- [ ] Keys in the player: **Space** pause, **9**/**0** volume, **M** mute, **I** channel name, **Esc**/**Q** stop and return to the card you started from
+- [ ] An offline channel (search for one) says "<name> is offline right now." and any key dismisses it
+- [ ] Phone remote while watching: pause, volume and mute reach the Twitch page (seek, subtitles and next do nothing)
+- [ ] Leaving Twitch (Esc to the profile list, **Switch service**) while a stream plays stops it
+- [ ] Playback quality and CPU on the RN96 (Twitch picks the quality; check 1080p60 is smooth)
+
 ## Known issues
 
 - [ ] Channel pages sometimes give no view count or upload date for a video (seen on a Safiya Nygaard upload); the card then shows none. For You fills it from other lists or looks it up; the channel screen does not.

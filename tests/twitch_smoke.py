@@ -163,6 +163,15 @@ def main():
             except urllib.error.HTTPError as error:
                 return error.code, json.load(error)
 
+        def post(port, path, body):
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/api/{path}", data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            try:
+                with client.open(req, timeout=10) as response:
+                    return response.status, json.load(response)
+            except urllib.error.HTTPError as error:
+                return error.code, json.load(error)
+
         def wait_up(port):
             until = time.monotonic() + 10
             while time.monotonic() < until:
@@ -236,6 +245,35 @@ def main():
             assert body["items"][0]["title"] == text
 
             bad_input(port)
+
+            # Watching: /twitch/play starts the player page; the page's reports drive the status.
+            for bad in ({"login": ""}, {"login": "a b"}, {"login": "x/../y"}, {"login": "a" * 26}, {}, {"login": 5}):
+                assert post(port, "twitch/play", bad)[0] == 400, bad
+            assert request(port, "status")[1]["playing"] is False
+            assert post(port, "twitch/play", {"login": "shroud"}) == (200, {"status": "starting"})
+            status = request(port, "status")[1]
+            session = status["session"]
+            assert status["playing"] and status["id"] == "twitch:shroud" and status["page"] == f"/twitch.html?c=shroud&s={session}", status
+            # A report for another session is ignored; the right one sets the position and pause state.
+            assert post(port, "player/report", {"session": session + 1, "position": 9.0}) == (200, {"commands": []})
+            assert request(port, "status")[1]["position"] is None
+            assert post(port, "player/report", {"session": session, "position": 1.5, "paused": False, "title": "shroud"}) == (200, {"commands": []})
+            status = request(port, "status")[1]
+            assert (status["position"], status["paused"], status["title"]) == (1.5, False, "shroud")
+            # The page says the channel is offline: no mpv, a clear message, the session is over.
+            post(port, "player/report", {"session": session, "outcome": "error", "code": -4})
+            status = request(port, "status")[1]
+            assert status["playing"] is False and status["error"] == "shroud is offline right now.", status
+            # Esc on the page is a normal stop and leaves no error behind.
+            post(port, "twitch/play", {"login": "lirik"})
+            session = request(port, "status")[1]["session"]
+            post(port, "player/report", {"session": session, "outcome": "quit"})
+            status = request(port, "status")[1]
+            assert status["playing"] is False and status["error"] is None, status
+            # /api/stop also ends a Twitch session, and a new play clears an old error.
+            post(port, "twitch/play", {"login": "lirik"})
+            assert request(port, "status")[1]["playing"] is True
+            assert post(port, "stop", {})[0] == 200 and request(port, "status")[1]["playing"] is False
 
             # Failures are a short, safe message.
             for failure in ("http", "integrity"):

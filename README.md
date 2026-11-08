@@ -45,7 +45,7 @@ cargo run
 firefox --kiosk http://127.0.0.1:7878
 ```
 
-CouchTube opens on **What are we watching?**: choose **YouTube** or **Twitch** (the one used last is highlighted). Each service has its own **Who’s watching?** screen and its own profiles. On the YouTube one, choose Guest to browse signed out, or Add profile to connect an account. Esc on a profile screen, or **Switch service** in the YouTube Home menu, returns to the choice. Twitch mode is being built (see [`docs/twitch-mode.md`](docs/twitch-mode.md)): so far you can browse top live streams, categories and channel search, with no Twitch account or registration needed (it uses Twitch's unofficial web API); watching streams is the next step.
+CouchTube opens on **What are we watching?**: choose **YouTube** or **Twitch** (the one used last is highlighted). Each service has its own **Who’s watching?** screen and its own profiles. On the YouTube one, choose Guest to browse signed out, or Add profile to connect an account. Esc on a profile screen, or **Switch service** in the YouTube Home menu, returns to the choice. Twitch mode is being built (see [`docs/twitch-mode.md`](docs/twitch-mode.md)): so far you can browse top live streams, categories and channel search, with no Twitch account or registration needed (it uses Twitch's unofficial web API); you can also **watch a live channel**: Enter on a stream opens Twitch's player in the CouchTube window (**Space** pause, **9**/**0** volume, **M** mute, **Esc** stop). VODs, chat, following and the phone remote's Twitch screens come later.
 
 Firefox in kiosk mode has no window controls: close it with **Alt+F4**.
 
@@ -188,6 +188,7 @@ mpv settings (1080p cap, VA-API, SponsorBlock script, `ytdl-format`) are in [`do
 | GET/POST | `/api/twitch/profiles` | Twitch profiles `{profiles: [{id, name, color}], active_id}` (a list separate from `/api/profiles`, with its own Guest); POST `{name, color?}` creates one |
 | DELETE | `/api/twitch/profiles/<id>` | Removes a Twitch profile (Guest can't be removed); the active one falls back to Guest |
 | POST | `/api/twitch/profiles/<id>/select` | Selects the active Twitch profile and stops playback |
+| POST | `/api/twitch/play` | Body `{login}`; starts a live Twitch channel in the CouchTube window (`/api/status` then shows `page: /twitch.html?…`, `id: twitch:<login>`); an offline channel or other failure appears as `error` there |
 | GET | `/api/twitch/status` | `{source}`: `unofficial` (default) or `official` (both Twitch credentials set) |
 | GET | `/api/twitch/categories`, `/streams`, `/search` | Twitch pages `{items, cursor}`: top categories; live streams (`?game_id=` for one category); channel search (`?q=`). All take `cursor` and `refresh=true`; with the unofficial source a cursor is the next page size (`n48`) |
 | GET | `/api/health` | `{"status":"ok"}` |

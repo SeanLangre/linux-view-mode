@@ -92,8 +92,34 @@ try {
   assert.match(await evaluate("document.querySelector('.tw-card .card-meta').textContent"), /shroud · Game · 4\.2K watching/)
   assert.equal(await evaluate("document.querySelector('.tw-card .badge.live')?.textContent"), 'LIVE')
   await wait("document.activeElement?.classList.contains('tw-card')")
+
+  // Watching. Hold Twitch's player script so the page stays "connecting" and the session stays open.
+  const status = async () => (await (await fetch(`${base}/api/status`)).json())
+  await send('Fetch.enable', { patterns: [{ urlPattern: 'https://player.twitch.tv/*' }] })
+  await key('ArrowRight') // The other card: the focus must come back to the one we leave from.
+  await key('ArrowLeft')
   await key('Enter')
-  await wait("document.querySelector('.status')?.textContent.includes('arrives in the next build step')")
+  await wait("document.querySelector('iframe.player-frame')?.src.includes('/twitch.html?c=shroud')")
+  const playing = await status()
+  assert.equal(playing.playing, true)
+  assert.equal(playing.id, 'twitch:shroud')
+  // Esc reaches the player page (it has the focus), which tells the backend to stop.
+  await wait("document.querySelector('iframe.player-frame')?.contentDocument?.readyState === 'interactive'")
+  await key('Escape')
+  await wait("!document.querySelector('iframe.player-frame')")
+  assert.equal((await status()).playing, false)
+  await wait("document.activeElement?.classList.contains('tw-card')")
+  assert.equal(await evaluate("document.querySelector('.status.error')"), null)
+
+  // A page that cannot load Twitch's player fails with a message, which any key dismisses.
+  await send('Fetch.disable')
+  await key('Enter')
+  await wait("document.querySelector('.status.error')?.textContent.includes('could not play this stream')")
+  assert.equal((await status()).error !== null, true)
+  await key('ArrowRight')
+  await wait("!document.querySelector('.status.error')")
+  assert.equal((await status()).error, null)
+  await wait("document.activeElement?.classList.contains('tw-card')")
   await key('Escape')
   await wait("document.querySelector('.page-title')?.textContent === 'Twitch'")
   assert.match(await focused(), /Top live streams/)
@@ -144,7 +170,7 @@ try {
   await key('Escape')
   await wait("document.querySelector('.mode-card') && document.activeElement?.textContent.includes('Twitch')")
   assert.deepEqual(errors, [], 'browser raised a JavaScript exception')
-  console.log('Twitch browser check passed: service choice, Twitch profile, top live, categories and back-focus, search, back to the choice.')
+  console.log('Twitch browser check passed: service choice, Twitch profile, top live, watching (start, Esc stop, error message), categories and back-focus, search, back to the choice.')
 } finally {
   socket?.close()
   chromium.kill('SIGTERM')

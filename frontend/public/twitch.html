@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CouchTube Twitch player</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; color: #fff; font-family: system-ui, sans-serif; }
+  /* The page, not the embedded player, keeps keyboard focus so the same keys work as on YouTube. */
+  #player iframe { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; pointer-events: none; }
+  #osd { position: fixed; left: 2rem; top: 2rem; max-width: 70vw; padding: 0.6rem 1rem; border-radius: 0.5rem;
+    background: rgb(0 0 0 / 0.8); font-size: 2rem; white-space: pre-line; opacity: 0; transition: opacity 0.2s; z-index: 3; }
+  #osd.on { opacity: 1; }
+  #live { display: inline-block; margin-right: 0.6rem; padding: 0 0.5rem; border-radius: 0.3rem; background: #9146ff; font-size: 1.4rem; font-weight: 700; }
+  #wait { position: fixed; inset: 0; display: grid; place-items: center; font-size: 2.2rem; z-index: 1; pointer-events: none; }
+  #wait.off { display: none; }
+</style>
+</head>
+<body tabindex="0">
+<div id="player"></div>
+<div id="wait">Connecting to Twitch…</div>
+<div id="osd"></div>
+<script>
+// Plays one live Twitch channel in Twitch's embedded player and mirrors what the YouTube page
+// does: the backend gets pause state and "playing" from here, and sends back the same commands
+// the phone remote and keyboard use. Live streams have no seeking, subtitles or queue.
+const params = new URLSearchParams(location.search)
+const channel = /^[A-Za-z0-9_]{1,25}$/.test(params.get('c') || '') ? params.get('c') : ''
+const session = Number(params.get('s'))
+
+// What the backend is told when the page gives up (see `twitch_error` in src/player.rs).
+const OFFLINE = -4
+const SCRIPT_FAILED = -1
+
+let player = null
+let ready = false
+let playing = false
+let finished = false
+let osdTimer = 0
+let failures = 0
+
+function show(text, ms = 2500, live = false) {
+  const osd = document.getElementById('osd')
+  osd.replaceChildren()
+  if (live) {
+    const badge = document.createElement('span')
+    badge.id = 'live'
+    badge.textContent = 'LIVE'
+    osd.appendChild(badge)
+  }
+  osd.appendChild(document.createTextNode(text))
+  osd.classList.add('on')
+  clearTimeout(osdTimer)
+  osdTimer = setTimeout(() => osd.classList.remove('on'), ms)
+}
+
+function snapshot() {
+  if (!ready) return {}
+  const seconds = playing ? Number(player.getCurrentTime()) : NaN
+  return {
+    // The backend treats the first position as "the stream started", so only send one once playing.
+    position: Number.isFinite(seconds) && seconds >= 0 ? seconds : playing ? 0 : undefined,
+    paused: player.isPaused(),
+    title: channel,
+  }
+}
+
+async function report(extra = {}) {
+  try {
+    const res = await fetch('/api/player/report', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session, ...snapshot(), ...extra }),
+    })
+    if (!res.ok) throw new Error(String(res.status))
+    failures = 0
+    const body = await res.json()
+    for (const command of body.commands || []) run(command)
+  } catch {
+    // The backend is gone or restarting; it closes this window itself.
+    failures += 1
+  }
+}
+
+function finish(outcome, extra = {}) {
+  if (finished) return
+  finished = true
+  void report({ outcome, ...extra })
+}
+
+// The commands are mpv's, as sent by the remote: ["cycle","pause"], ["add","volume",2]. Seeking and
+// subtitles do not exist for a live stream and are ignored.
+function run(command) {
+  if (!ready || !Array.isArray(command)) return
+  const [name, a, b] = command
+  if (name === 'cycle' && a === 'pause') togglePause()
+  else if (name === 'cycle' && a === 'mute') {
+    const muted = !player.getMuted()
+    player.setMuted(muted)
+    show(muted ? 'Muted' : 'Mute off', 1200)
+  } else if (name === 'add' && a === 'volume' && typeof b === 'number') {
+    // mpv's volume is 0-100; Twitch's is 0-1.
+    const volume = Math.min(1, Math.max(0, player.getVolume() + b / 100))
+    player.setVolume(volume)
+    if (volume > 0 && player.getMuted()) player.setMuted(false)
+    show(`Volume ${Math.round(volume * 100)}`, 1200)
+  }
+}
+
+function togglePause() {
+  if (player.isPaused()) { player.play(); show('Playing', 1200) }
+  else { player.pause(); show('Paused', 1200) }
+}
+
+document.addEventListener('keydown', (event) => {
+  if (event.ctrlKey || event.altKey || event.metaKey) return
+  const key = event.key
+  const handled = ['Escape', 'q', ' ', 'MediaPlayPause', '9', '0', 'm', 'i',
+    'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'n', 'c'].includes(key)
+  if (!handled) return
+  event.preventDefault()
+  if (key === 'Escape' || key === 'q') finish('quit')
+  else if (key === ' ' || key === 'MediaPlayPause') ready && togglePause()
+  else if (key === '9') run(['add', 'volume', -5])
+  else if (key === '0') run(['add', 'volume', 5])
+  else if (key === 'm') run(['cycle', 'mute'])
+  else if (key === 'i') show(`${channel}`, 4000, true)
+})
+
+function start() {
+  if (!channel) { finish('error', { code: SCRIPT_FAILED }); return }
+  player = new Twitch.Player('player', {
+    channel,
+    // Twitch only embeds on the hosts it is told about: this page's own (127.0.0.1 or localhost).
+    parent: [location.hostname],
+    width: '100%',
+    height: '100%',
+    autoplay: true,
+    muted: false,
+  })
+  player.addEventListener(Twitch.Player.READY, () => {
+    ready = true
+    player.setMuted(false)
+    player.play()
+  })
+  player.addEventListener(Twitch.Player.PLAYING, () => {
+    if (!playing) show(channel, 3000, true)
+    playing = true
+    document.getElementById('wait').classList.add('off')
+  })
+  // Autoplay can be refused; the first key press then starts it.
+  player.addEventListener(Twitch.Player.PLAYBACK_BLOCKED, () => show('Press Space to play', 6000))
+  player.addEventListener(Twitch.Player.OFFLINE, () => finish('error', { code: OFFLINE }))
+  // A live channel that "ends" went offline.
+  player.addEventListener(Twitch.Player.ENDED, () => finish('error', { code: OFFLINE }))
+}
+
+setInterval(() => { if (!finished) void report() }, 500)
+setInterval(() => window.focus(), 2000)
+const script = document.createElement('script')
+script.src = 'https://player.twitch.tv/js/embed/v1.js'
+script.onload = start
+script.onerror = () => finish('error', { code: SCRIPT_FAILED })
+document.head.appendChild(script)
+</script>
+</body>
+</html>

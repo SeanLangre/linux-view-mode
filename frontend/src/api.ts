@@ -152,6 +152,8 @@ const twitchQuery = (params: Record<string, string | undefined>, refresh: boolea
   return text ? `?${text}` : ''
 }
 /** `unofficial` (Twitch's web API, no registration) or `official` (Helix with a registered application). */
+/** Watch a live channel in the CouchTube window; the page to show comes from `playerStatus()`. */
+export const twitchPlay = (login: string) => playback<{ status: string }>('twitch/play', { login })
 export const twitchStatus = () => playback<{ source: 'official' | 'unofficial' }>('twitch/status')
 export const twitchCategories = (cursor?: string, refresh = false) =>
   playback<TwitchPage<TwitchCategory>>(`twitch/categories${twitchQuery({ cursor }, refresh)}`)

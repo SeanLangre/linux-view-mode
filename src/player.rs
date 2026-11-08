@@ -53,6 +53,8 @@ struct Launch {
     start: Option<f64>,
     firefox: Option<PathBuf>,
     subtitles: Option<String>,
+    /// A live Twitch stream: always the browser page, no progress, and no mpv to fall back to.
+    twitch: bool,
 }
 /// How the Firefox page says playback ended.
 #[derive(Clone, Debug, PartialEq)]
@@ -125,6 +127,17 @@ impl Drop for Running {
         }
     }
 }
+/// The message for a Twitch page that gave up. `-4` is the page saying the channel is offline;
+/// `-3` is the backend's own start timeout; anything else is a player or network problem.
+fn twitch_error(id: &str, code: i64) -> String {
+    let channel = id.strip_prefix("twitch:").unwrap_or(id);
+    match code {
+        -4 => format!("{channel} is offline right now."),
+        -3 => "Twitch did not start playing. Check the network and try again.".into(),
+        _ => "Twitch could not play this stream. Try again.".into(),
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Status {
     pub playing: bool,
@@ -190,6 +203,7 @@ impl Player {
             start,
             firefox: firefox.map(Path::to_path_buf),
             subtitles: subtitles.map(str::to_owned),
+            twitch: false,
         };
         let sequence = inner.sequence + 1;
         let running = if inner.web {
@@ -197,6 +211,22 @@ impl Player {
         } else {
             inner.launch_mpv(id, sequence, &launch)?
         };
+        inner.sequence = sequence;
+        inner.running = Some(running);
+        Ok(sequence)
+    }
+    /// Plays a live Twitch channel on `/twitch.html`, shown by the CouchTube window. Twitch always
+    /// plays in the browser (the embedded player is the only route), whatever `COUCHTUBE_PLAYER` says.
+    pub async fn play_twitch(&self, login: &str) -> Result<u64> {
+        if !crate::helix::is_login(login) {
+            bail!("invalid Twitch channel name");
+        }
+        let mut inner = self.0.lock().await;
+        inner.stop().await?;
+        inner.error = None;
+        let launch = Launch { start: None, firefox: None, subtitles: None, twitch: true };
+        let sequence = inner.sequence + 1;
+        let running = inner.launch_twitch_page(login, sequence, &launch);
         inner.sequence = sequence;
         inner.running = Some(running);
         Ok(sequence)
@@ -376,6 +406,22 @@ impl Inner {
         }
     }
 
+    /// A live Twitch session: the page plays the channel and reports like the YouTube page does.
+    fn launch_twitch_page(&self, login: &str, sequence: u64, launch: &Launch) -> Running {
+        Running {
+            child: None,
+            directory: PathBuf::new(),
+            id: format!("twitch:{login}"),
+            sequence,
+            details: Arc::new(StdMutex::new(Details::default())),
+            observer: tokio::spawn(async {}),
+            web: true,
+            page: Some(format!("/twitch.html?c={login}&s={sequence}")),
+            started: Instant::now(),
+            launch: launch.clone(),
+        }
+    }
+
     async fn reap(&mut self) -> Result<()> {
         let mut web_outcome = None;
         let exit = match self.running.as_mut() {
@@ -400,6 +446,13 @@ impl Inner {
             let mut running = self.running.take().expect("running player");
             running.finish().await;
             if let Outcome::Error(code) = outcome {
+                if running.launch.twitch {
+                    // There is no mpv fallback for Twitch: say what went wrong and stop.
+                    tracing::warn!(stream=%running.id, code, "the Twitch player could not play this stream");
+                    self.error = Some(twitch_error(&running.id, code));
+                    self.ended.push_back(Ended { status: running.status(), reason: EndReason::Failed });
+                    return Ok(());
+                }
                 tracing::warn!(video_id=%running.id, code, "the browser could not play this video; using mpv");
                 let mut launch = running.launch.clone();
                 let position = running.status().position.filter(|p| *p >= 5.0);
@@ -690,6 +743,45 @@ mod tests {
         assert!(!player.0.lock().await.running.as_ref().unwrap().web);
         player.stop().await.unwrap();
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_twitch_channel_plays_on_its_own_page_and_never_falls_back_to_mpv() {
+        let player = Player::new("config/mpv".into()).unwrap();
+        // Twitch is browser-only, even when mpv is the chosen player for YouTube.
+        let session = player.play_twitch("shroud").await.unwrap();
+        let status = player.status().await.unwrap();
+        assert!(status.playing);
+        assert_eq!(status.page, Some(format!("/twitch.html?c=shroud&s={session}")));
+        assert_eq!(status.id.as_deref(), Some("twitch:shroud"));
+        // Reports and remote commands travel the same way as for YouTube.
+        player.command(&[json!("cycle"), json!("mute")]).await.unwrap();
+        let report = WebReport { session, position: Some(3.0), paused: Some(false), title: Some("shroud".into()), ..Default::default() };
+        assert_eq!(player.web_report(report).await, vec![json!(["cycle", "mute"])]);
+        // The page says the channel is offline: no mpv, a clear message, and the session is over.
+        player.web_report(WebReport { session, outcome: Some("error".into()), code: Some(-4), ..Default::default() }).await;
+        let status = player.status().await.unwrap();
+        assert!(!status.playing);
+        assert_eq!(status.error.as_deref(), Some("shroud is offline right now."));
+        let ended = player.take_ended().await.unwrap();
+        assert_eq!(ended.len(), 1);
+        assert_eq!(ended[0].reason, EndReason::Failed);
+        // A stream that never starts (no CouchTube window to show the page) fails the same way after the timeout.
+        player.play_twitch("lirik").await.unwrap();
+        player.0.lock().await.running.as_mut().unwrap().started = Instant::now() - WEB_START_TIMEOUT - Duration::from_secs(1);
+        let status = player.status().await.unwrap();
+        assert!(!status.playing);
+        assert!(status.error.unwrap().contains("did not start"));
+        // Pressing Esc on the page is a normal stop.
+        let session = player.play_twitch("lirik").await.unwrap();
+        player.web_report(WebReport { session, outcome: Some("quit".into()), ..Default::default() }).await;
+        assert!(!player.status().await.unwrap().playing);
+        assert!(player.status().await.unwrap().error.is_none());
+        // Names that are not Twitch logins are refused before anything starts.
+        for bad in ["", "a b", "x/../y", "a?b=c&d", &"a".repeat(26)] {
+            assert!(player.play_twitch(bad).await.is_err(), "{bad:?}");
+        }
+        assert!(!player.status().await.unwrap().playing);
     }
 
     #[tokio::test]

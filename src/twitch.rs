@@ -72,6 +72,7 @@ pub fn routes() -> Router<AppState> {
         .route("/twitch/profiles/{id}", axum::routing::delete(remove_profile))
         .route("/twitch/profiles/{id}/select", post(select_profile))
         .route("/twitch/status", get(status))
+        .route("/twitch/play", post(play))
         .route("/twitch/categories", get(categories))
         .route("/twitch/streams", get(streams))
         .route("/twitch/search", get(search))
@@ -81,6 +82,28 @@ pub fn routes() -> Router<AppState> {
 /// registered application).
 async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({ "source": state.twitch.name() }))
+}
+
+#[derive(Deserialize)]
+struct PlayRequest {
+    login: String,
+}
+
+/// Starts a live channel in the CouchTube window (the page named in `/api/status`).
+async fn play(
+    State(state): State<AppState>,
+    body: Result<Json<PlayRequest>, JsonRejection>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let Json(request) = body.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "expected {login} JSON"))?;
+    if !helix::is_login(&request.login) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid channel name"));
+    }
+    let _transition = state.transition.lock().await;
+    state.playback.play_twitch(&request.login).await.map_err(|err| {
+        tracing::error!("could not start Twitch playback: {err:#}");
+        ApiError::new(StatusCode::BAD_GATEWAY, "could not start the player, check the server log")
+    })?;
+    Ok(Json(json!({ "status": "starting" })))
 }
 
 #[derive(Deserialize)]

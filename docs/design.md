@@ -61,7 +61,7 @@ src/
   profiles.rs     profiles, Firefox profile setup, sign-in, login check
   pairing.rs      phone pairing for sign-in: token, QR code, LAN page, xdotool typing
   pairing.html    phone page
-  player.rs       legacy mpv process + persistent IPC (one player at a time)
+  player.rs       the one player at a time: YouTube's embed page, legacy mpv + IPC, and Twitch live pages
   playback.rs     progress, watched sync, queue advancement
   feeds.rs        account feeds, persistent cache and prefetch
   discover.rs     For You discovery and ranking

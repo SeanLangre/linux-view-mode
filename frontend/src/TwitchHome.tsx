@@ -71,6 +71,15 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
   const request = useRef(0)
   const refreshNext = useRef(false)
   const focusAfter = useRef<number | null>(null)
+  // Watching: the player page covers this screen, like on the YouTube side.
+  const [playback, setPlayback] = useState<api.PlayerStatus | null>(null)
+  const [playbackError, setPlaybackError] = useState<string | null>(null)
+  const [starting, setStarting] = useState(false)
+  const startingRef = useRef(false)
+  const playbackRevision = useRef(0)
+  const focusBeforePlay = useRef(0)
+  const wasPlaying = useRef(false)
+  const prevPlaying = useRef(false)
 
   const entry = stack[stack.length - 1]
   const screen = entry.screen
@@ -125,10 +134,46 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
     }
   }
   function open(target: Target) {
-    if (target.kind === 'watch') setNote(`Watching ${target.name} arrives in the next build step.`)
+    if (target.kind === 'watch') void startStream(target.login, target.name)
     else if (target.kind === 'offline') setNote(`${target.name} is offline right now.`)
     else push(target)
   }
+  async function startStream(login: string, name: string) {
+    if (startingRef.current) return
+    startingRef.current = true
+    playbackRevision.current++
+    focusBeforePlay.current = focusIndex()
+    setStarting(true)
+    setPlaybackError(null)
+    setNote(`Starting ${name}…`)
+    try {
+      await api.twitchPlay(login)
+      wasPlaying.current = true
+      setPlayback({ playing: true, id: `twitch:${login}`, title: name, position: null, duration: null, paused: false, error: null })
+    } catch (err) {
+      setPlaybackError((err as Error).message)
+      setNote(null)
+    } finally {
+      startingRef.current = false
+      setStarting(false)
+    }
+  }
+
+  async function stopStream() {
+    playbackRevision.current++
+    try {
+      await api.stop()
+      setPlayback(null)
+      setPlaybackError(null)
+    } catch (err) { setPlaybackError((err as Error).message) }
+  }
+
+  /** A stream that failed (for example an offline channel) leaves its message until a key is pressed. */
+  function dismissError() {
+    setPlaybackError(null)
+    void api.stop().catch(() => {})
+  }
+
   function loadMore() {
     if (!cursor || loading) return
     const mine = ++request.current
@@ -143,8 +188,55 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
       .finally(() => { if (request.current === mine) setLoading(false) })
   }
 
+  // Follow the backend's player: it tells us which page to show and when the stream ended.
+  useEffect(() => {
+    let cancelled = false
+    let timer: number
+    async function poll() {
+      const revision = playbackRevision.current
+      try {
+        const status = await api.playerStatus()
+        if (!cancelled && revision === playbackRevision.current && !startingRef.current) {
+          // Only Twitch sessions belong to this screen.
+          const ours = !status.playing || (status.id ?? '').startsWith('twitch:')
+          if (ours) {
+            wasPlaying.current = status.playing
+            setPlayback(status)
+            setPlaybackError(status.error)
+            if (status.playing) setNote(null)
+          }
+        }
+      } catch { /* the next poll tries again */ }
+      if (!cancelled) timer = window.setTimeout(poll, 1000)
+    }
+    void poll()
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [])
+
+  // Leaving the Twitch screens stops whatever is playing.
+  useEffect(() => () => { void api.stop().catch(() => {}) }, [])
+
+  // When the stream ends, the focus returns to the card it was started from.
+  const isPlaying = Boolean(playback?.playing)
+  useEffect(() => {
+    if (!isPlaying && prevPlaying.current) navButtons()[focusBeforePlay.current]?.focus()
+    prevPlaying.current = isPlaying
+    // navButtons only reads the DOM.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying])
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      // While a stream plays, Esc stops it (also when the page does not have the focus).
+      if (starting || playback?.playing) {
+        if (event.key === 'Escape' || event.key === 'Backspace') { event.preventDefault(); if (!starting) void stopStream() }
+        else if (event.key.startsWith('Arrow') || event.key === 'Enter' || event.key === '/') event.preventDefault()
+        return
+      }
+      if (playbackError) {
+        dismissError()
+        if (event.key === 'Escape') { event.preventDefault(); return }
+      }
       const typing = event.target instanceof HTMLInputElement
       if (event.key === 'Escape' || (event.key === 'Backspace' && !typing)) { event.preventDefault(); back(); return }
       if (typing) {
@@ -204,6 +296,18 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
         {cursor && <div className="profile-actions"><button data-nav disabled={loading} onClick={loadMore}>{loading ? 'Loading…' : 'Load more'}</button></div>}
       </>}
       {note && <p className="status" role="status">{note}</p>}
+      {playbackError && <p className="status error" role="alert">{playbackError}</p>}
+      {playback?.playing && playback.page && (
+        <iframe
+          key={playback.page}
+          className="player-frame"
+          src={playback.page}
+          title="Twitch player"
+          allow="autoplay; fullscreen"
+          ref={(frame) => frame?.focus()}
+          onLoad={(e) => e.currentTarget.contentWindow?.focus()}
+        />
+      )}
       <footer className="hints"><span><kbd>← ↑ ↓ →</kbd>Move</span><span><kbd>Enter</kbd>Open</span><span><kbd>Esc</kbd>Back</span>
         {screen.kind !== 'search' && <span><kbd>/</kbd>Search</span>}
         {isGrid && <span><kbd>U</kbd>Refresh</span>}
