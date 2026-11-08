@@ -230,7 +230,7 @@ The smoke tests start the real backend with fake `firefox`, `yt-dlp` and Twitch 
 cargo build
 python3 tests/profiles_smoke.py     # simulated YouTube accounts and sign-in
 python3 tests/twitch_smoke.py       # Twitch browsing, watching, sign-in and Following (unofficial and official sources)
-python3 tests/feeds_smoke.py        # simulated feeds, queue, progress and watched sync (currently failing, see TODO.md)
+python3 tests/feeds_smoke.py        # simulated feeds, queue, resume and watched sync, driving the Firefox player's reports
 lua tests/sponsorblock_test.lua     # needs Lua; tests SponsorBlock without network access
 ```
 
