@@ -1,15 +1,13 @@
 # TODO
 
-Checklist for [`plan.md`](plan.md). Tick items as they're done; move finished sections to **Done** at the bottom.
+Checklist for the [roadmap](docs/roadmap.md). Remove items once they are verified on screen.
 
 ## Phase 7 — Polish (implemented 2026-10-25, not tried on the real TV)
 
-- [ ] Subtitles per profile: Home → Subtitles (Off/English), play a video that has captions; check the language shows and that **C** cycles
-- [ ] YouTube TV tile: Home → YouTube TV opens signed in; the TV user agent works; Alt+F4 returns; the profile still signs in afterwards (`user.js` restored)
 - [ ] HDMI-CEC: needs `cec-client` or a `/dev/cec*` device; check **Turn TV off** appears and works
 - [ ] Phone remote: pair a real phone, then pause, seek, volume, next, queue, pasted link; **Forget phones** locks it out
 
-## For You (implemented 2026-11-01, see [`special-for-you.md`](special-for-you.md), not tried on screen)
+## For You (implemented 2026-11-01, see [`docs/for-you.md`](docs/for-you.md), not tried on screen)
 
 - [ ] Home → For You: type a theme, check it appears as a seed and videos load (first load makes several yt-dlp calls)
 - [ ] **S** on a video seeds its channel; **D** removes a focused seed; **U** refreshes
@@ -21,16 +19,6 @@ Checklist for [`plan.md`](plan.md). Tick items as they're done; move finished se
 - [ ] No Shorts and no videos of 3 minutes or less in For You; one channel does not fill the top rows; older seeds show up over the hours
 - [ ] **W** marks a video watched (badge appears, it leaves For You) and clears it again; the **History** button opens CouchTube's own history
 - [ ] Tune scoring (weights in `src/discover.rs`) after a week of real use
-
-## Playback in the CouchTube window (implemented 2026-11-01, headless-tested only)
-
-- [ ] Enter on a video: the player covers the kiosk window with a picture, keys work, Esc returns to the same card
-- [ ] Timeline: thin line always, full bar after a seek, pause or **I**
-- [ ] Subtitles: start with the profile's language; **C** really hides the captions (only the player state was checked)
-- [ ] Phone remote: pause, seek, volume, mute and subtitles reach the player page
-- [ ] A music video (embedding refused) falls back to mpv at the same position; with no CouchTube window open, mpv takes over after 20 s
-- [ ] Sponsor segments are skipped by the page
-- [ ] Restart the kiosk once so the autoplay setting in `kiosk-firefox/user.js` applies
 
 ## Known issues
 

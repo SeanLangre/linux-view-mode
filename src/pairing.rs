@@ -5,7 +5,7 @@
 //! Everything the phone sends is sealed with a per-session key that travels only in the QR code's
 //! `#fragment` (browsers never send it), so a passive sniffer sees ciphertext. The phone must also
 //! show the same confirmation code as the TV before anything is typed. An attacker who can rewrite
-//! the page in transit still wins; see `encryption-plan.md`.
+//! the page in transit still wins; see `docs/phone-signin-encryption.md`.
 use anyhow::{Context, Result, bail};
 use axum::{
     Json, Router,

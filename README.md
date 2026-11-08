@@ -5,19 +5,19 @@ A fullscreen, keyboard-only YouTube app for a TV. It runs on an Arch Linux box c
 - **Backend:** Rust + Axum on `127.0.0.1:7878`. Runs `yt-dlp` for search and channel pages, tracks playback, and plays videos in the Firefox window (YouTube's embedded player), with `mpv` as the fallback.
 - **Frontend:** React + TypeScript + Vite, shown in Firefox kiosk mode.
 
-The full design and roadmap are in [`plan.md`](plan.md); the working checklist is [`TODO.md`](TODO.md).
+Design notes live in [`docs/`](docs/): [`design.md`](docs/design.md) (decisions, architecture, security rules), [`accounts.md`](docs/accounts.md) (profiles, sign-in, feeds), [`phone-signin-encryption.md`](docs/phone-signin-encryption.md), [`for-you.md`](docs/for-you.md), [`server.md`](docs/server.md) (TV server setup and checks) and [`roadmap.md`](docs/roadmap.md), [`legacy-mpv.md`](docs/legacy-mpv.md) (mpv, no longer the main player). The working checklist is [`TODO.md`](TODO.md).
 
 ## Playback in the CouchTube window
 
 By default a video plays inside the Firefox kiosk window that already shows CouchTube, so there is no second window to focus. The backend reports the player page (`frontend/public/watch.html`) in `/api/status` (`page`); the interface then covers the screen with it. The page shows YouTube's embedded player and reports position, duration and pause state to `POST /api/player/report`; the answer carries the commands from the phone remote. It keeps mpv's keys (**Space**, arrows, **9**/**0**, **M**, **C**, **I**, **N**, **Esc**/**Q**), skips paid sponsor segments, and honours the profile's subtitle language. A thin red line along the bottom edge shows progress; after a seek, a pause or **I** the full timeline with times appears. **C** (or the phone remote's subtitles button) switches subtitles on and off, using the profile's language when the video has it. Resume, progress, watched marks, the queue and "Continue watching" work as before. The backend writes `kiosk-firefox/user.js` at start so that Firefox may autoplay.
 
-mpv plays the video instead, from the same position, when YouTube refuses to embed it (many music videos, error 150/153) or the page has not started within 20 seconds (for example when no CouchTube window is open, or it is still on the profile screen). Set `COUCHTUBE_PLAYER=mpv` to always use mpv. Limits: the kiosk profile is not signed in to YouTube (account logins stay out of the interface), so Premium, age-restricted videos and your account's ad settings do not apply, and age-restricted videos fall back to mpv; YouTube chooses the quality; ad skip buttons cannot be clicked, so install uBlock Origin through the Firefox policy (`config/firefox/policies.json`).
+mpv is the legacy fallback: it plays the video instead, from the same position, when YouTube refuses to embed it or the page has not started within 20 seconds. Details, limits and `COUCHTUBE_PLAYER=mpv` are in [`docs/legacy-mpv.md`](docs/legacy-mpv.md). The kiosk profile is not signed in to YouTube (account logins stay out of the interface), so Premium, age-restricted videos and your account's ad settings do not apply; YouTube chooses the quality; ad skip buttons cannot be clicked, so install uBlock Origin through the Firefox policy (`config/firefox/policies.json`).
 
 ## Status
 
 | Works now | Coming next |
 |---|---|
-| Search, channel pages, keyboard navigation, back stack, recent searches, mpv playback, profiles/sign-in (with phone keyboard), account feeds, resume, queue, watched-history sync, and the deploy scripts (`deploy/`, written but not yet run on the server) | Real-account and server checks, polish (Phase 7) |
+| Search, channel pages, keyboard navigation, back stack, recent searches, Firefox playback (mpv legacy fallback), profiles/sign-in (with phone keyboard), account feeds, resume, queue, watched-history sync, and the deploy scripts (`deploy/`, written but not yet run on the server) | Real-account, real-TV and server checks (see `TODO.md`) |
 
 Press Enter on a video to play it fullscreen (in the CouchTube window, or in mpv as described above). Esc or `q` stops playback; the interface keeps the same screen and selected card. Cards show a green "✓ Watched" badge for finished videos and "Resume 12:34" with a progress bar for started ones, on every list. The user has tested playback and profile sign-in successfully on the dev machine. Explicit Firefox kiosk stacking/focus-return and two-account switching checks remain on the checklist.
 
@@ -26,7 +26,8 @@ Press Enter on a video to play it fullscreen (in the CouchTube window, or in mpv
 Arch Linux:
 
 ```bash
-sudo pacman -S --needed rust nodejs npm yt-dlp mpv firefox curl xdotool
+sudo pacman -S --needed rust nodejs npm yt-dlp firefox curl xdotool
+sudo pacman -S --needed mpv   # optional: legacy fallback player
 ```
 
 `xdotool` is only needed for typing from a phone during sign-in (see below).
@@ -67,8 +68,8 @@ and open `http://127.0.0.1:5173`. Vite forwards `/api` calls to the backend (wit
 | `COUCHTUBE_REMOTE_PORT` | `7880` | Port for the phone remote; opened on all interfaces only while the remote is switched on (see below) |
 | `COUCHTUBE_CEC_DEVICE` | `/dev/cec0` | HDMI-CEC device used by `cec-ctl` for **Turn TV off** |
 | `COUCHTUBE_FRONTEND` | `frontend/dist` | Folder with the built frontend |
-| `COUCHTUBE_PLAYER` | `browser` | `mpv` plays every video in mpv; otherwise videos play in the CouchTube window (see below) |
-| `COUCHTUBE_MPV_CONFIG` | `config/mpv` | mpv config directory, including scripts (relative to the backend working directory) |
+| `COUCHTUBE_PLAYER` | `browser` | Legacy: `mpv` plays every video in mpv; otherwise videos play in the CouchTube window |
+| `COUCHTUBE_MPV_CONFIG` | `config/mpv` | Legacy: mpv config directory, including scripts (relative to the backend working directory) |
 | `COUCHTUBE_DATA_DIR` | `$XDG_DATA_HOME/couchtube` or `~/.local/share/couchtube` | Private SQLite database and account Firefox profiles |
 | `RUST_LOG` | `couchtube=info` | Log level, e.g. `couchtube=debug,tower_http=debug` |
 
@@ -90,7 +91,7 @@ The QR code opens a page on your phone that works as a keyboard for the Firefox 
 **Using it:** scan the QR code and keep the phone page open. The phone shows a 6-digit code and the TV asks "Does it show this code?". Press **Yes, that's my phone** if they match, or **No** if not (the QR code is replaced and the old link stops working). Nothing can be typed until you confirm, and a second phone can't join afterwards. Firefox opens on Google when you press **Yes**. On the phone, go in order: **1. Email**, then once the TV shows the password page **2. Password**, then **3. 2-step code** if Google asks. Use the TV keyboard for anything else.
 
 **Safety:**
-- **Encrypted only against passive listening.** The page is plain HTTP, so someone who can tamper with the network (ARP spoofing, a rogue access point, a hacked router) can rewrite the page, read the key and see everything, with matching codes. They would have to act during the few minutes a sign-in is open. **On shared Wi-Fi, use the TV keyboard instead.** Only HTTPS with a certificate the phone trusts, or a native app, would fix it; neither is planned. See `encryption-plan.md`.
+- **Encrypted only against passive listening.** The page is plain HTTP, so someone who can tamper with the network (ARP spoofing, a rogue access point, a hacked router) can rewrite the page, read the key and see everything, with matching codes. They would have to act during the few minutes a sign-in is open. **On shared Wi-Fi, use the TV keyboard instead.** Only HTTPS with a certificate the phone trusts, or a native app, would fix it; neither is planned. See [`docs/phone-signin-encryption.md`](docs/phone-signin-encryption.md).
 - **Port 7879 is the only part of CouchTube reachable from the network, and only while a sign-in is in progress.** An unused link expires after 15 minutes or when you leave the screen. The main API stays on `127.0.0.1` and rejects other `Host` headers. Don't forward the port on your router, and don't show the TV screen to people you don't trust, since it shows the key.
 - Typed text is never logged. It goes to `xdotool` on stdin (not in `ps`), without a shell, limited to 256 characters on one line. If the window can't be found or focused, nothing is typed.
 - Email, password and code can each be sent up to 3 times per sign-in. After that the phone page says to use the TV keyboard.
@@ -121,7 +122,7 @@ Automated checks use simulated accounts and watched-history requests. Checked wi
 
 ## For You
 
-**For You** (Home menu) is CouchTube's own recommendation list, built from seeds you give it instead of YouTube's algorithm. The design notes are in [`special-for-you.md`](special-for-you.md).
+**For You** (Home menu) is CouchTube's own recommendation list, built from seeds you give it instead of YouTube's algorithm. The design notes are in [`docs/for-you.md`](docs/for-you.md).
 
 - **Seeds** (per profile): type a **theme** ("retro computing") or paste a **video** link in the box at the top; **S** on any video adds its **channel**; **D** on a seed chip removes it. Typing `not music` or `-music` adds an **exclusion**.
 - **Discovery** runs as Guest, so it never touches the account's history. Each refresh searches 6 themes (the 3 newest plus 3 older ones rotating by the hour), 3 blended pairs among the 4 newest themes (rotating by the hour, labelled "A & B"), 4 video seeds (by title), and reads 6 channels' latest uploads (video seeds and channels rotate the same way when there are more). Results are cached for 10 minutes; **U** refreshes.
@@ -162,13 +163,7 @@ In the search box, ↓ moves to the results and Esc goes back.
 
 These keys work in the CouchTube window and in mpv. Space pauses; ←/→ seek 10 seconds; ↑/↓ seek 60 seconds; `9`/`0` adjust volume; `m` mutes; `i` shows title and progress; `n` plays the next queued video; Esc/`q` quit. If Firefox retains focus, Esc stops playback through the API.
 
-`config/mpv/mpv.conf` caps video at 1080p and requests VA-API for the Intel TV server. The dev-machine test log confirms AV1 1080p59.94 using VA-API. Hardware-decoding support still needs checking separately on the TV server. The bundled SponsorBlock script uses `curl` to request paid sponsor segments and skips them automatically. A missing request or segment leaves playback running. `ytdl-format` tries HLS streams first (YouTube's direct streams from the TV client began answering 403 on 2026-11-01), then the direct formats; AV1 is skipped unless nothing else exists. Queue controls and watched-history sync are implemented; subtitles and appliance setup come later.
-
-### Reported playback warnings
-
-One dev-machine session logged `client removed during hook handling`, `Packet corrupt`, `Invalid OBU length` and `Failed to parse temporal unit`, while successfully starting AV1 playback with hardware decoding. The cause is unconfirmed; a local-file playback check did not reproduce the hook warning. See [mpv’s hook handling](https://github.com/mpv-player/mpv/blob/v0.41.0/player/command.c#L181-L196) and [FFmpeg’s AV1 parser](https://github.com/FFmpeg/FFmpeg/blob/master/libavcodec/cbs_av1.c#L720-L727) for the messages’ origins.
-
-If it happens again, note the video ID, whether the picture freezes or breaks up, whether audio continues, and whether you pressed Esc/q or playback stopped itself. Save the surrounding terminal output. `Exiting... (Quit)` records a quit request; the supplied excerpt does not establish why it was issued.
+mpv settings (1080p cap, VA-API, SponsorBlock script, `ytdl-format`) are in [`docs/legacy-mpv.md`](docs/legacy-mpv.md).
 
 ## API
 
@@ -189,6 +184,7 @@ If it happens again, note the video ID, whether the picture freezes or breaks up
 | POST | `/api/remote/pair`, `/confirm`, `/reject` | Start a pairing link (10 minutes, one use), accept the phone's code `{code}`, or refuse it |
 | DELETE | `/api/remote/devices` | Forget every paired phone |
 | GET | `/api/health` | `{"status":"ok"}` |
+| GET | `/api/check` | Diagnostics for the active profile: whether history loads and whether a sample of its videos and thumbnails are available |
 | GET | `/api/feed/<kind>` | Video list: `foryou`, `continue`, `local` (CouchTube's own history), `recommended`, `subscriptions`, `history`, `watchlater`, `liked`; `?refresh=true` bypasses the feed cache; every list carries the profile's `completed` / `resume_position` |
 | GET/POST | `/api/seeds` | For You seeds `[{id, kind, value, label}]` (`theme`, `video`, `channel`, `exclude`); POST `{kind, value, label?}` adds one and returns the list |
 | DELETE | `/api/seeds/<id>` | Removes a seed |
@@ -230,11 +226,14 @@ lua tests/sponsorblock_test.lua     # needs Lua; tests SponsorBlock without netw
 ## Project layout
 
 ```
-src/            Rust backend (main.rs, api.rs, ytdlp.rs, player.rs, playback.rs, profiles.rs, feeds.rs, db.rs, discover.rs for For You)
-frontend/       React app (App.tsx, nav.ts, api.ts, styles.css); public/watch.html is the player page
-config/mpv/     Playback settings, keys, SponsorBlock script
+src/            Rust backend (main.rs, api.rs, ytdlp.rs, player.rs, playback.rs, profiles.rs, pairing.rs, remote.rs, cec.rs, feeds.rs, db.rs, discover.rs for For You)
+frontend/       React app (App.tsx, ProfileGate.tsx, nav.ts, api.ts, styles.css); public/watch.html is the player page
+config/mpv/     Legacy mpv settings, keys, SponsorBlock script
 config/firefox/ Account preferences and extension policy
-plan.md         Design and roadmap
+docs/            Design notes, server setup, roadmap
+deploy/         install script and systemd units
+packaging/      AppImage build
+tests/          Smoke tests
 TODO.md         Checklist
 ```
 

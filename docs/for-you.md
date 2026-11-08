@@ -1,8 +1,8 @@
-# Special for you — our own recommendations
+# For You: our own recommendations
 
 A new Home button opens a "For You" screen: a recommendation list built by CouchTube itself, not by YouTube's algorithm. The user seeds it with themes, videos and channels, and CouchTube discovers new videos from those seeds.
 
-Status: implemented 2026-11-01 (build order below), not yet tried with real use. The algorithm is intentionally simple and will be tuned over time. `README.md` has the user-facing description; this file keeps the decisions.
+Status: implemented 2026-11-01 (build order below), not yet tried with real use. The algorithm is intentionally simple and will be tuned over time. [`README.md`](../README.md#for-you) has the user-facing description; this file keeps the decisions.
 
 ## Concept
 
@@ -24,7 +24,7 @@ Status: implemented 2026-11-01 (build order below), not yet tried with real use.
    - New Home button opens the For You screen, reusing the card grid and load-more paging.
    - A key on any card adds it to the seeds or dismisses it.
    - A small seed manager edits themes and shows why a video was suggested ("because: retro computing").
-5. **Caching**: results are cached like the other feeds; `U` refreshes. Keep yt-dlp request volume low (account-flagging risk, see `plan.md`).
+5. **Caching**: results are cached like the other feeds; `U` refreshes. Keep yt-dlp request volume low (account-flagging risk, see [`design.md`](design.md)).
 
 ## Decision
 
@@ -51,4 +51,4 @@ Discovery runs as **Guest** (no account cookies), decided 2026-11-01, so searche
 - [x] 3i. First real use (2026-11-01) showed cheap horror "FULL MOVIE" uploads, hours old with ~10–50k views, all from the blend "interesting long documentary & spooky":
   - A blend's results must mention both themes in the title or channel name (`Source::needs`, `mentions_all`): one word of 3+ letters per theme, ignoring filler words like "interesting" and "long"; words of 5+ letters also match other endings ("documentaries", "spookiest"). On that list it dropped all 10 blend results.
   - Views per day are spread over at least 30 days (`POPULAR_MIN_DAYS`), so 15k views in five hours no longer counts as 15k a day.
-- [x] 4. Recorded in `plan.md` and `TODO.md`.
+- [x] 4. Recorded in [`roadmap.md`](roadmap.md) and [`TODO.md`](../TODO.md).

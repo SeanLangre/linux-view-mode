@@ -1,8 +1,8 @@
-# Encrypted phone sign-in: plan
+# Encrypted phone sign-in
 
 Design for encrypting the phone form against passive Wi-Fi sniffing, plus a confirmation code that
 the phone and TV must both show. **Implemented 2026-10-21**; the manual tests at the end are still
-open (see `TODO.md`). Covers `src/pairing.rs`, `src/pairing.html`, `src/api.rs` and
+open (see [`TODO.md`](../TODO.md)). Covers `src/pairing.rs`, `src/pairing.html`, `src/api.rs` and
 `frontend/src/ProfileGate.tsx`.
 
 ## Threat model
@@ -15,7 +15,7 @@ open (see `TODO.md`). Covers `src/pairing.rs`, `src/pairing.html`, `src/api.rs` 
 
 The last row is a hard limit of a browser page served over plain HTTP: the phone can only trust
 code that the network delivered. Only HTTPS with a trusted certificate or a native phone app would
-fix it, and both are out of scope. The README and `plan.md` keep saying "trusted network only".
+fix it, and both are out of scope. The README and [`accounts.md`](accounts.md) keep saying "trusted network only".
 
 ### How the active attack works
 The attacker sits in the middle (ARP spoofing, rogue access point or hacked router), forwards
