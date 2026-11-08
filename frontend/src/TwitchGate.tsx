@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import * as api from './api'
+import TwitchHome from './TwitchHome'
 
 type View = { kind: 'list' } | { kind: 'add' } | { kind: 'remove'; profile: api.TwitchProfile }
 const COLORS = ['#9146ff', '#6288d9', '#c7799e', '#53a888', '#cb9a53', '#dc7474']
@@ -54,25 +55,26 @@ export default function TwitchGate({ onService }: { onService: () => void }) {
   })
 
   useEffect(() => {
+    // Once a profile is chosen, TwitchHome handles the keys.
+    if (active) return
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape' || (event.key === 'Backspace' && !(event.target instanceof HTMLInputElement))) {
         event.preventDefault()
         if (busy) return
         setError(null)
-        if (active) setActive(null)
-        else if (view.kind === 'list') onService()
+        if (view.kind === 'list') onService()
         else setView({ kind: 'list' })
         return
       }
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || busy) return
       const buttons = Array.from(panel.current?.querySelectorAll<HTMLButtonElement>('[data-nav]:not(:disabled)') ?? [])
       const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
-      const columns = !active && view.kind === 'list' ? 4 : 1
+      const columns = view.kind === 'list' ? 4 : 1
       const offset = ({ ArrowLeft: -1, ArrowRight: 1, ArrowUp: -columns, ArrowDown: columns } as Record<string, number>)[event.key]
       if (offset !== undefined) {
         event.preventDefault()
         buttons[Math.max(0, Math.min(buttons.length - 1, index + offset))]?.focus()
-      } else if (!active && view.kind === 'list' && event.key === 'd') {
+      } else if (view.kind === 'list' && event.key === 'd') {
         const profile = profiles[highlighted]
         if (profile && profile.id !== 'guest') { event.preventDefault(); setView({ kind: 'remove', profile }) }
       }
@@ -81,19 +83,12 @@ export default function TwitchGate({ onService }: { onService: () => void }) {
     return () => window.removeEventListener('keydown', onKeyDown)
   })
 
+  if (active) return <TwitchHome key={active.id} profile={active} onProfile={() => setActive(null)} onService={onService} />
+
   return (
     <main className="app profiles-page" ref={panel}>
-      <header className="top"><div className="brand"><span className="logo">▶</span> CouchTube · Twitch</div>
-        {active && <div className="profile-label" style={{ borderColor: active.color }}>{active.name}</div>}</header>
-      {active && <>
-        <h1 className="page-title">Twitch</h1>
-        <p className="status">Signed in as the Twitch profile “{active.name}”. Browsing and watching streams arrive in the next build steps (see docs/twitch-mode.md).</p>
-        <div className="profile-actions">
-          <button data-nav onClick={() => setActive(null)}>Switch profile</button>
-          <button data-nav onClick={onService}>Switch service</button>
-        </div>
-      </>}
-      {!active && view.kind === 'list' && <>
+      <header className="top"><div className="brand"><span className="logo" style={{ color: '#9146ff' }}>▶</span> CouchTube · Twitch</div></header>
+      {view.kind === 'list' && <>
         <h1 className="page-title">Who’s watching Twitch?</h1>
         {loading ? <p className="status">Loading profiles…</p> : <div className="profile-grid">
           {profiles.map((profile, index) => <button type="button" data-nav key={profile.id}
@@ -111,7 +106,7 @@ export default function TwitchGate({ onService }: { onService: () => void }) {
         <footer className="hints"><span><kbd>← ↑ ↓ →</kbd>Move</span><span><kbd>Enter</kbd>Choose</span>
           <span><kbd>D</kbd>Remove profile</span><span><kbd>Esc</kbd>Change service</span></footer>
       </>}
-      {!active && view.kind === 'add' && <>
+      {view.kind === 'add' && <>
         <h1 className="page-title">Add a Twitch profile</h1>
         <p className="status">Twitch profiles are separate from YouTube profiles. Signing in to Twitch comes in a later step.</p>
         <form className="profile-form" onSubmit={(event) => {
@@ -131,7 +126,7 @@ export default function TwitchGate({ onService }: { onService: () => void }) {
           <button type="button" disabled={busy} onClick={() => setView({ kind: 'list' })}>Cancel</button>
         </form>
       </>}
-      {!active && view.kind === 'remove' && <>
+      {view.kind === 'remove' && <>
         <h1 className="page-title">Remove {view.profile.name}?</h1>
         <p className="status">This deletes this Twitch profile. Your YouTube profiles are not affected.</p>
         <div className="profile-actions">

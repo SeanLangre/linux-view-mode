@@ -45,7 +45,7 @@ cargo run
 firefox --kiosk http://127.0.0.1:7878
 ```
 
-CouchTube opens on **What are we watching?**: choose **YouTube** or **Twitch** (the one used last is highlighted). Each service has its own **Who’s watching?** screen and its own profiles. On the YouTube one, choose Guest to browse signed out, or Add profile to connect an account. Esc on a profile screen, or **Switch service** in the YouTube Home menu, returns to the choice. Twitch mode is being built (see [`docs/twitch-mode.md`](docs/twitch-mode.md)): so far only Twitch profiles exist.
+CouchTube opens on **What are we watching?**: choose **YouTube** or **Twitch** (the one used last is highlighted). Each service has its own **Who’s watching?** screen and its own profiles. On the YouTube one, choose Guest to browse signed out, or Add profile to connect an account. Esc on a profile screen, or **Switch service** in the YouTube Home menu, returns to the choice. Twitch mode is being built (see [`docs/twitch-mode.md`](docs/twitch-mode.md)): so far you can browse top live streams, categories and channel search (set `COUCHTUBE_TWITCH_CLIENT_ID` and `COUCHTUBE_TWITCH_CLIENT_SECRET` first); watching streams is the next step.
 
 Firefox in kiosk mode has no window controls: close it with **Alt+F4**.
 
@@ -66,6 +66,7 @@ and open `http://127.0.0.1:5173`. Vite forwards `/api` calls to the backend (wit
 | `COUCHTUBE_PORT` | `7878` | Port to listen on (always `127.0.0.1` only) |
 | `COUCHTUBE_PAIR_PORT` | `7879` | Port for the phone keyboard used during sign-in (listens on all interfaces, see below) |
 | `COUCHTUBE_REMOTE_PORT` | `7880` | Port for the phone remote; opened on all interfaces only while the remote is switched on (see below) |
+| `COUCHTUBE_TWITCH_CLIENT_ID`, `COUCHTUBE_TWITCH_CLIENT_SECRET` | unset | Twitch mode needs both, from a free application at `dev.twitch.tv/console`. Without them the Twitch screens say how to set up. Never commit the secret |
 | `COUCHTUBE_CEC_DEVICE` | `/dev/cec0` | HDMI-CEC device used by `cec-ctl` for **Turn TV off** |
 | `COUCHTUBE_FRONTEND` | `frontend/dist` | Folder with the built frontend |
 | `COUCHTUBE_PLAYER` | `browser` | Legacy: `mpv` plays every video in mpv; otherwise videos play in the CouchTube window |
@@ -187,6 +188,8 @@ mpv settings (1080p cap, VA-API, SponsorBlock script, `ytdl-format`) are in [`do
 | GET/POST | `/api/twitch/profiles` | Twitch profiles `{profiles: [{id, name, color}], active_id}` (a list separate from `/api/profiles`, with its own Guest); POST `{name, color?}` creates one |
 | DELETE | `/api/twitch/profiles/<id>` | Removes a Twitch profile (Guest can't be removed); the active one falls back to Guest |
 | POST | `/api/twitch/profiles/<id>/select` | Selects the active Twitch profile and stops playback |
+| GET | `/api/twitch/status` | `{configured}`: whether the Twitch client id and secret are set |
+| GET | `/api/twitch/categories`, `/streams`, `/search` | Twitch pages `{items, cursor}`: top categories; live streams (`?game_id=` for one category); channel search (`?q=`). All take `cursor` and `refresh=true`; 503 when Twitch isn't set up |
 | GET | `/api/health` | `{"status":"ok"}` |
 | GET | `/api/check` | Diagnostics for the active profile: whether history loads and whether a sample of its videos and thumbnails are available |
 | GET | `/api/feed/<kind>` | Video list: `foryou`, `continue`, `local` (CouchTube's own history), `recommended`, `subscriptions`, `history`, `watchlater`, `liked`; `?refresh=true` bypasses the feed cache; every list carries the profile's `completed` / `resume_position` |
@@ -223,6 +226,7 @@ The optional playback smoke test uses real mpv with a generated local audio file
 cargo build && python3 tests/playback_smoke.py
 python3 tests/feeds_smoke.py        # simulated feeds, queue, progress and watched sync
 python3 tests/profiles_smoke.py     # simulated accounts; no real browser or Google sessions
+python3 tests/twitch_smoke.py       # Twitch browsing against a fake Helix server; add --browser for the keyboard UI (needs Chromium and Node 22+)
 python3 tests/profiles_smoke.py --browser  # keyboard UI check; needs Chromium and Node 22+
 lua tests/sponsorblock_test.lua     # needs Lua; tests SponsorBlock without network access
 ```
@@ -230,8 +234,8 @@ lua tests/sponsorblock_test.lua     # needs Lua; tests SponsorBlock without netw
 ## Project layout
 
 ```
-src/            Rust backend (main.rs, api.rs, ytdlp.rs, player.rs, playback.rs, profiles.rs, pairing.rs, remote.rs, cec.rs, feeds.rs, db.rs, discover.rs for For You, twitch.rs for Twitch mode)
-frontend/       React app (App.tsx, ModeGate.tsx, ProfileGate.tsx, TwitchGate.tsx, nav.ts, api.ts, styles.css); public/watch.html is the player page
+src/            Rust backend (main.rs, api.rs, ytdlp.rs, player.rs, playback.rs, profiles.rs, pairing.rs, remote.rs, cec.rs, feeds.rs, db.rs, discover.rs for For You, twitch.rs and helix.rs for Twitch mode)
+frontend/       React app (App.tsx, ModeGate.tsx, ProfileGate.tsx, TwitchGate.tsx, TwitchHome.tsx, nav.ts, api.ts, styles.css); public/watch.html is the player page
 config/mpv/     Legacy mpv settings, keys, SponsorBlock script
 config/firefox/ Account preferences and extension policy
 docs/            Design notes, server setup, roadmap

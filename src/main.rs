@@ -3,6 +3,7 @@ mod cec;
 mod db;
 mod discover;
 mod feeds;
+mod helix;
 mod pairing;
 mod playback;
 mod player;
@@ -99,6 +100,7 @@ async fn main() -> Result<()> {
         feeds: feeds::Feeds(profiles.db.clone()),
         profiles,
         transition: Default::default(),
+        twitch: helix::Helix::from_env(),
     };
     remote.resume(state.clone()).await;
     let tracked = state.clone();

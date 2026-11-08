@@ -23,6 +23,7 @@ pub struct AppState {
     pub feeds: crate::feeds::Feeds,
     pub profiles: Profiles,
     pub remote: crate::remote::Remote,
+    pub twitch: crate::helix::Helix,
     pub transition: Arc<Mutex<()>>,
 }
 

@@ -1,6 +1,6 @@
 # Twitch mode
 
-Status: **in progress** (written 2026-11-08). Build step 1 is implemented (mode choice screen, per-mode active profile, Twitch profiles and Guest); everything after it is still planned. A second mode of CouchTube for Twitch, used the same way as the YouTube side: keyboard only, fullscreen, from the couch. Many details of Twitch's APIs below come from memory of their public docs and are marked **verify** where a wrong guess would change the design.
+Status: **in progress** (written 2026-11-08). Build steps 1 and 2 are implemented (mode choice, Twitch profiles; browsing top streams, categories and search as a guest); watching and everything after it is still planned. A second mode of CouchTube for Twitch, used the same way as the YouTube side: keyboard only, fullscreen, from the couch. Many details of Twitch's APIs below come from memory of their public docs and are marked **verify** where a wrong guess would change the design.
 
 **Decisions (2026-11-08):** (1) ads are handled best-effort with uBlock Origin; (2) the **first screen** is a choice between **YouTube** and **Twitch**; (3) Twitch has its **own, separate profiles**, not shared with the YouTube ones.
 
@@ -39,7 +39,7 @@ CouchTube opens on a new **mode choice**: two big buttons, **YouTube** and **Twi
 
 ## Accounts and sign-in
 
-- Twitch needs a **registered application** (client id, from the Twitch developer console). The user creates it once and puts the client id in a setting (`COUCHTUBE_TWITCH_CLIENT_ID`). Without it, Twitch mode shows a one-screen explanation instead of failing. A client **secret** is only needed for app tokens (search, categories, public streams) and must never be committed or logged; the device-code flow for a public client avoids needing it for the user token (**verify**; otherwise use the client-credentials flow for public data and keep the secret in a `0600` file).
+- Twitch needs a **registered application** (from the Twitch developer console). The user creates it once and sets `COUCHTUBE_TWITCH_CLIENT_ID` **and** `COUCHTUBE_TWITCH_CLIENT_SECRET` (decided in step 2). Both are needed because browsing as a guest (categories, streams, search) uses an **app access token**, which Twitch only issues with the secret (client-credentials flow). Without the pair, Twitch mode shows a one-screen explanation instead of failing. The secret is never logged, never put in process arguments (it goes to `curl` on stdin) and must not be committed; with a systemd unit, put it in an `EnvironmentFile` with mode `0600`. The device-code login in step 4 is a separate, per-profile user token (**verify** that it works for a public client).
 - **Device code login**, per profile: TV shows `twitch.tv/activate` and a short code (also as a QR code for the phone); the backend polls until Twitch returns a token. Scope: `user:read:follows` (what the Following row needs).
 - **Twitch profiles are separate from YouTube profiles.** Each Twitch profile is `{id, name, color}` plus its own token, in new tables (`twitch_profiles`, `twitch_tokens`) rather than a column on `profiles`, so the two lists never mix and removing one never touches the other. Someone can have a YouTube profile and a Twitch profile of the same name without any link between them. A Twitch profile needs no Firefox folder.
 - Tokens are stored in the SQLite database (`0600`), refreshed when they expire. Treat them like the Firefox cookies: local disk only, never logged, deleted when the Twitch profile is removed.
@@ -81,11 +81,12 @@ Results are cached per profile for a short time (live data about 1 minute, categ
 
 ## Backend
 
-- New `src/twitch.rs`: Helix client, token storage and refresh, device-code flow, caching. Added to `AppState` next to `feeds`.
-- Routes under `/api/twitch/…` (all behind the existing localhost-only `Host` check): `login` (start and poll), `following`, `categories`, `category/<id>`, `search`, `channel/<login>`, plus `/api/play` accepting a Twitch target.
+- `src/helix.rs` (step 2): the read-only Helix client: app-token fetch and renewal on 401, a one-request-at-a-time gate, an in-memory cache (live data 1 minute, categories 10 minutes, `refresh=true` skips it), parsers and validators. `AppState.twitch` holds it.
+- `src/twitch.rs`: the routes. Done: `mode`, `twitch/profiles…`, `twitch/status`, `twitch/categories`, `twitch/streams?game_id=`, `twitch/search?q=` (all take `cursor` and `refresh`; 503 when not set up, 502 "could not reach Twitch" on upstream errors, 400 on bad ids/cursors/queries without calling Twitch). Planned: `login` (start and poll), `following`, `channel/<login>`, plus `/api/play` accepting a Twitch target.
 - Validation like the YouTube IDs: logins `^[A-Za-z0-9_]{1,25}$`, VOD and category ids digits only, always build URLs ourselves, no shell. A Twitch target in the database is namespaced (`twitch:<login>` / `twitch:v<id>`) so it cannot collide with a YouTube id in `progress` or `queue`.
 - `/api/status` gets a `kind` (`youtube` or `twitch`) so the interface picks the right player page.
-- No new crates are needed unless a plain HTTP client is: Helix is called with an HTTP client crate (for example `reqwest` with rustls; pinned, at least two weeks old, as for the other dependencies).
+- **No new crate:** HTTP goes through the `curl` binary (already required for SponsorBlock), with its config on stdin so the secret and token never show up in `ps`. Values written into that config are checked first (credentials 10-64 letters and digits, URLs on a short allow-list). Images are passed to the page only if they come from `static-cdn.jtvnw.net`.
+- `COUCHTUBE_TWITCH_API_URL` and `COUCHTUBE_TWITCH_TOKEN_URL` override the Twitch addresses (https, or `http://127.0.0.1:` only); they exist so `tests/twitch_smoke.py` can run against a fake Twitch.
 
 ## Frontend
 
@@ -103,7 +104,7 @@ Results are cached per profile for a short time (live data about 1 minute, categ
 ## Build order
 
 1. [x] Mode choice screen (YouTube / Twitch), per-mode active profile, Twitch profiles and Guest. Implemented 2026-11-08: `GET/PUT /api/mode`, `GET/POST /api/twitch/profiles`, `DELETE /api/twitch/profiles/<id>`, `POST /api/twitch/profiles/<id>/select` in `src/twitch.rs`; `ModeGate.tsx` and `TwitchGate.tsx` in the frontend; a **Switch service** item in the YouTube Home menu. The Twitch side stops at a placeholder page after choosing a profile. Unit-tested and the endpoints were tried with curl; not yet seen on screen (see `TODO.md`). The kiosk's start URL did not need to change: `/` now simply opens the mode choice.
-2. [ ] `twitch.rs` with an app token only: Top Games, Streams by category, Search; Twitch screens as a guest; client id setting and the "not set up" screen.
+2. [x] App-token browsing as a guest. Implemented 2026-11-08: `src/helix.rs`, the `twitch/status|categories|streams|search` routes, `TwitchHome.tsx` (Home with Top live streams, Categories, Search; a category's streams; Load more; `u` refresh, `/` search, Esc back with the focus restored) and the "not set up" screen. Enter on a stream says watching arrives in the next step. Tested against a fake Helix with `tests/twitch_smoke.py` (curl path, token reuse and renewal, caching, validation, no secret in the log) and `--browser` (keyboard flow in Chromium); **not yet tried against the real Twitch** (see `TODO.md`).
 3. [ ] `twitch.html` player page for live streams, reporting through `/api/player/report`; check on the real TV that the embed plays with `parent=127.0.0.1` and what ads do with uBlock Origin.
 4. [ ] Device-code login per Twitch profile, token storage and refresh, the **Following** row.
 5. [ ] Channel screen with VODs and clips, VOD resume in `progress`, queue for VODs.

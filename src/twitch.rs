@@ -3,7 +3,7 @@
 //! YouTube profiles, so removing one never touches the other.
 use axum::{
     Json, Router,
-    extract::{Path, State, rejection::JsonRejection},
+    extract::{Path, Query, State, rejection::{JsonRejection, QueryRejection}},
     http::StatusCode,
     routing::{get, post},
 };
@@ -13,6 +13,7 @@ use serde_json::json;
 use crate::{
     api::{ApiError, AppState, internal},
     db::TwitchProfile,
+    helix::{self, Category, Channel, Page, Stream},
     profiles,
 };
 
@@ -24,6 +25,86 @@ pub fn routes() -> Router<AppState> {
         .route("/twitch/profiles", get(list_profiles).post(create_profile))
         .route("/twitch/profiles/{id}", axum::routing::delete(remove_profile))
         .route("/twitch/profiles/{id}/select", post(select_profile))
+        .route("/twitch/status", get(status))
+        .route("/twitch/categories", get(categories))
+        .route("/twitch/streams", get(streams))
+        .route("/twitch/search", get(search))
+}
+
+/// `{configured}`: whether a Twitch client id and secret are set. The Twitch screens show how to
+/// set them up when this is false.
+async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(json!({ "configured": state.twitch.configured() }))
+}
+
+#[derive(Deserialize)]
+struct Browse {
+    game_id: Option<String>,
+    cursor: Option<String>,
+    q: Option<String>,
+    #[serde(default)]
+    refresh: bool,
+}
+
+fn browse(params: Result<Query<Browse>, QueryRejection>, state: &AppState) -> Result<Browse, ApiError> {
+    let Query(params) = params.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid query"))?;
+    if !state.twitch.configured() {
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Twitch is not set up: set COUCHTUBE_TWITCH_CLIENT_ID and COUCHTUBE_TWITCH_CLIENT_SECRET",
+        ));
+    }
+    if params.cursor.as_deref().is_some_and(|c| !helix::valid_cursor(c)) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid cursor"));
+    }
+    if params.game_id.as_deref().is_some_and(|g| !helix::is_id(g)) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid category id"));
+    }
+    Ok(params)
+}
+
+fn upstream(what: &'static str) -> impl FnOnce(anyhow::Error) -> ApiError {
+    move |err| {
+        tracing::error!("Twitch {what} failed: {err:#}");
+        ApiError::new(StatusCode::BAD_GATEWAY, "could not reach Twitch, try again")
+    }
+}
+
+async fn categories(
+    State(state): State<AppState>,
+    params: Result<Query<Browse>, QueryRejection>,
+) -> Result<Json<Page<Category>>, ApiError> {
+    let params = browse(params, &state)?;
+    let page = state.twitch.top_categories(params.cursor.as_deref(), params.refresh).await.map_err(upstream("categories"))?;
+    Ok(Json(page))
+}
+
+/// Live streams: of one category (`game_id`), or the most watched on all of Twitch.
+async fn streams(
+    State(state): State<AppState>,
+    params: Result<Query<Browse>, QueryRejection>,
+) -> Result<Json<Page<Stream>>, ApiError> {
+    let params = browse(params, &state)?;
+    let page = state
+        .twitch
+        .streams(params.game_id.as_deref(), params.cursor.as_deref(), params.refresh)
+        .await
+        .map_err(upstream("streams"))?;
+    Ok(Json(page))
+}
+
+async fn search(
+    State(state): State<AppState>,
+    params: Result<Query<Browse>, QueryRejection>,
+) -> Result<Json<Page<Channel>>, ApiError> {
+    let params = browse(params, &state)?;
+    let text = params
+        .q
+        .as_deref()
+        .and_then(helix::clean_query)
+        .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "type 1-100 characters to search for"))?;
+    let page = state.twitch.search_channels(&text, params.cursor.as_deref(), params.refresh).await.map_err(upstream("search"))?;
+    Ok(Json(page))
 }
 
 async fn get_mode(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {

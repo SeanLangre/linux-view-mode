@@ -137,6 +137,29 @@ export async function removeTwitchProfile(id: string) {
   if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? `request failed (${response.status})`)
 }
 
+export type TwitchCategory = { id: string; name: string; box_art: string }
+export type TwitchStream = {
+  login: string; name: string; title: string; game_id: string; game_name: string
+  viewers: number; thumb: string; started_at: string | null
+}
+export type TwitchChannel = { login: string; name: string; live: boolean; title: string; game_name: string; thumb: string }
+export type TwitchPage<T> = { items: T[]; cursor: string | null }
+const twitchQuery = (params: Record<string, string | undefined>, refresh: boolean) => {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) if (value) query.set(key, value)
+  if (refresh) query.set('refresh', 'true')
+  const text = query.toString()
+  return text ? `?${text}` : ''
+}
+export const twitchStatus = () => playback<{ configured: boolean }>('twitch/status')
+export const twitchCategories = (cursor?: string, refresh = false) =>
+  playback<TwitchPage<TwitchCategory>>(`twitch/categories${twitchQuery({ cursor }, refresh)}`)
+/** Live streams of one category, or the most watched on all of Twitch. */
+export const twitchStreams = (gameId?: string, cursor?: string, refresh = false) =>
+  playback<TwitchPage<TwitchStream>>(`twitch/streams${twitchQuery({ game_id: gameId, cursor }, refresh)}`)
+export const twitchSearch = (q: string, cursor?: string, refresh = false) =>
+  playback<TwitchPage<TwitchChannel>>(`twitch/search${twitchQuery({ q, cursor }, refresh)}`)
+
 let profileScope = 'guest'
 export function setProfileScope(id: string) {
   // Drop pending responses from the previous account as well as its browser cache.

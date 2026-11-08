@@ -67,7 +67,8 @@ src/
   discover.rs     For You discovery and ranking
   remote.rs       phone remote (port 7880, off until switched on) and remote.html
   cec.rs          HDMI-CEC TV power
-  twitch.rs       Twitch mode: saved mode, Twitch profiles (see [`twitch-mode.md`](twitch-mode.md))
+  twitch.rs       Twitch mode routes: saved mode, Twitch profiles, browsing (see [`twitch-mode.md`](twitch-mode.md))
+  helix.rs        read-only Twitch Helix client (curl, app token, cache)
   vendor/         nacl.min.js (tweetnacl, inlined into the phone page)
   db.rs           SQLite profiles, progress, metadata, queue and per-profile cache
 frontend/         Vite + React + TS
@@ -77,6 +78,7 @@ frontend/         Vite + React + TS
   src/ModeGate.tsx     first screen: YouTube or Twitch
   src/ProfileGate.tsx  YouTube Who's watching, sign-in and phone pairing screens
   src/TwitchGate.tsx   Twitch Who's watching screen
+  src/TwitchHome.tsx   Twitch Home, top live, categories, category and search screens
   src/format.ts, recent.ts  time formatting, recent searches
   src/styles.css  10-foot styling (1rem = 1/80 of screen width)
 config/
@@ -85,7 +87,7 @@ config/
 frontend/public/watch.html  embedded player page shown in the kiosk window
 deploy/           install.sh, couchtube.service, couchtube-kiosk.{service,desktop}, couchtube-refresh{,.service,.timer}
 packaging/        AppImage build
-tests/            smoke tests (playback, feeds, profiles), fake mpv, SponsorBlock Lua test
+tests/            smoke tests (playback, feeds, profiles, Twitch), fake mpv, SponsorBlock Lua test
 ```
 
 ### Crates

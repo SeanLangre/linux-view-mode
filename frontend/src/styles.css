@@ -328,3 +328,11 @@ button:disabled, select:disabled { opacity: 0.5; }
 .mode-card { padding: 2.4rem 1.2rem; }
 .mode-card .profile-avatar { width: 7rem; height: 7rem; font-size: 3.5rem; }
 .mode-card strong { font-size: 1.8rem; }
+
+/* Twitch screens: grids of streams, categories and channels. */
+.tw-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1.2rem; margin: 1.2rem 0; }
+.tw-card { display: block; width: 100%; text-align: left; font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+.tw-card:focus { background: var(--surface-2); outline: 0.2rem solid var(--focus); transform: scale(1.04); }
+.tw-six { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.tw-portrait { aspect-ratio: 3 / 4; }
+.tw-portrait img { object-position: top; }

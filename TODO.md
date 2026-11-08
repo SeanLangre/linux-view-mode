@@ -27,6 +27,13 @@ Checklist for the [roadmap](docs/roadmap.md). Remove items once they are verifie
 - [ ] Twitch: add a profile, pick it, switch profile, remove it with **D** (Guest can't be removed); YouTube profiles are not affected
 - [ ] Restart the backend: the last mode and each service's active profile are remembered
 
+## Twitch mode, step 2 (implemented 2026-11-08; tested against a fake Twitch only, never the real one)
+
+- [ ] Register a Twitch application, start CouchTube with `COUCHTUBE_TWITCH_CLIENT_ID` and `COUCHTUBE_TWITCH_CLIENT_SECRET`, and check Twitch Home loads (without them it should explain how to set up)
+- [ ] Top live streams, Categories (6 per row, box art shows), a category's streams, Search: real thumbnails load, viewer counts and LIVE badges look right
+- [ ] Load more works on a real category list; `u` refreshes; Esc returns with the focus on the card you left
+- [ ] Check the thumbnails host: images come from `static-cdn.jtvnw.net` and are dropped otherwise, so a different host would show blank cards
+
 ## Known issues
 
 - [ ] Channel pages sometimes give no view count or upload date for a video (seen on a Safiya Nygaard upload); the card then shows none. For You fills it from other lists or looks it up; the channel screen does not.
