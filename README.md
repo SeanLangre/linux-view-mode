@@ -5,7 +5,7 @@ A fullscreen, keyboard-only YouTube app for a TV. It runs on an Arch Linux box c
 - **Backend:** Rust + Axum on `127.0.0.1:7878`. Runs `yt-dlp` for search and channel pages, tracks playback, and plays videos in the Firefox window (YouTube's embedded player), with `mpv` as the fallback.
 - **Frontend:** React + TypeScript + Vite, shown in Firefox kiosk mode.
 
-Design notes live in [`docs/`](docs/): [`design.md`](docs/design.md) (decisions, architecture, security rules), [`accounts.md`](docs/accounts.md) (profiles, sign-in, feeds), [`phone-signin-encryption.md`](docs/phone-signin-encryption.md), [`for-you.md`](docs/for-you.md), [`server.md`](docs/server.md) (TV server setup and checks) and [`roadmap.md`](docs/roadmap.md), [`legacy-mpv.md`](docs/legacy-mpv.md) (mpv, no longer the main player). The working checklist is [`TODO.md`](TODO.md).
+Design notes live in [`docs/`](docs/): [`design.md`](docs/design.md) (decisions, architecture, security rules), [`accounts.md`](docs/accounts.md) (profiles, sign-in, feeds), [`phone-signin-encryption.md`](docs/phone-signin-encryption.md), [`for-you.md`](docs/for-you.md), [`server.md`](docs/server.md) (TV server setup and checks) and [`roadmap.md`](docs/roadmap.md), [`legacy-mpv.md`](docs/legacy-mpv.md) (mpv, no longer the main player). Planned: [`twitch-mode.md`](docs/twitch-mode.md) (Twitch mode). The working checklist is [`TODO.md`](TODO.md).
 
 ## Playback in the CouchTube window
 
