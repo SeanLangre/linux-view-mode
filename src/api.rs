@@ -67,6 +67,7 @@ pub fn router(state: AppState) -> Router {
         .route("/next", post(next))
         .route("/search", get(search))
         .route("/channel/{id}", get(channel))
+        .merge(crate::twitch::routes())
         // Without this, unknown /api paths would fall through to the frontend's index.html.
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "no such endpoint") })
         .with_state(state)
@@ -170,7 +171,7 @@ pub struct ApiError {
 }
 
 impl ApiError {
-    fn new(status: StatusCode, message: &'static str) -> Self {
+    pub(crate) fn new(status: StatusCode, message: &'static str) -> Self {
         Self { status, message }
     }
 }
@@ -267,7 +268,7 @@ async fn status(State(state): State<AppState>) -> Result<Json<Status>, ApiError>
         })
 }
 
-fn internal(err: anyhow::Error) -> ApiError {
+pub(crate) fn internal(err: anyhow::Error) -> ApiError {
     tracing::error!("backend operation failed: {err:#}");
     ApiError::new(
         StatusCode::INTERNAL_SERVER_ERROR,

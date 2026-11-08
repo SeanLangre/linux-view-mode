@@ -17,6 +17,15 @@ pub struct Profile {
     pub subtitles: Option<String>,
 }
 
+/// A Twitch profile. Twitch profiles are a separate list from the YouTube `Profile`s: they share
+/// no ids, caches or settings, and removing one never touches the other.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct TwitchProfile {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+}
+
 /// One thing the user told "For You" to learn from: a theme, a video or a channel.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct Seed {
@@ -78,6 +87,12 @@ impl Database {
             CREATE TABLE IF NOT EXISTS remote_devices (
                 token_hash TEXT PRIMARY KEY, created_at INTEGER NOT NULL DEFAULT (unixepoch())
             );
+            CREATE TABLE IF NOT EXISTS twitch_profiles (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL,
+                created_at INTEGER NOT NULL DEFAULT (unixepoch())
+            );
+            INSERT OR IGNORE INTO twitch_profiles(id, name, color) VALUES ('guest', 'Guest', '#707887');
+            INSERT OR IGNORE INTO settings(key, value) VALUES ('twitch_active_profile', 'guest');
             INSERT OR IGNORE INTO profiles(id, name, color) VALUES ('guest', 'Guest', '#707887');
             INSERT OR IGNORE INTO settings(key, value) VALUES ('active_profile', 'guest');",
         )?;
@@ -273,6 +288,105 @@ impl Database {
         })
         .await
     }
+
+    /// The service the user chose last (`youtube` or `twitch`); `None` before the first choice.
+    pub async fn mode(&self) -> Result<Option<String>> {
+        self.with(|db| {
+            Ok(db.query_row("SELECT value FROM settings WHERE key = 'mode'", [], |r| r.get(0)).optional()?)
+        })
+        .await
+    }
+
+    pub async fn set_mode(&self, mode: &str) -> Result<()> {
+        let mode = mode.to_owned();
+        self.with(move |db| {
+            db.execute(
+                "INSERT INTO settings(key, value) VALUES ('mode', ?1) ON CONFLICT(key) DO UPDATE SET value = ?1",
+                [mode],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn twitch_list(&self) -> Result<Vec<TwitchProfile>> {
+        self.with(|db| {
+            let mut statement = db.prepare(
+                "SELECT id, name, color FROM twitch_profiles ORDER BY id != 'guest', created_at, rowid",
+            )?;
+            Ok(statement
+                .query_map([], |r| Ok(TwitchProfile { id: r.get(0)?, name: r.get(1)?, color: r.get(2)? }))?
+                .collect::<rusqlite::Result<_>>()?)
+        })
+        .await
+    }
+
+    pub async fn twitch_get(&self, id: &str) -> Result<Option<TwitchProfile>> {
+        let id = id.to_owned();
+        self.with(move |db| {
+            Ok(db
+                .query_row("SELECT id, name, color FROM twitch_profiles WHERE id = ?1", [id], |r| {
+                    Ok(TwitchProfile { id: r.get(0)?, name: r.get(1)?, color: r.get(2)? })
+                })
+                .optional()?)
+        })
+        .await
+    }
+
+    pub async fn twitch_create(&self, name: &str, color: &str) -> Result<TwitchProfile> {
+        let name = name.to_owned();
+        let color = color.to_owned();
+        self.with(move |db| {
+            let id: String = db.query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))?;
+            db.execute("INSERT INTO twitch_profiles(id, name, color) VALUES (?1, ?2, ?3)", params![id, name, color])?;
+            Ok(TwitchProfile { id, name, color })
+        })
+        .await
+    }
+
+    pub async fn twitch_active(&self) -> Result<TwitchProfile> {
+        self.with(|db| {
+            Ok(db.query_row(
+                "SELECT p.id, p.name, p.color FROM twitch_profiles p JOIN settings s ON s.value = p.id WHERE s.key = 'twitch_active_profile'",
+                [],
+                |r| Ok(TwitchProfile { id: r.get(0)?, name: r.get(1)?, color: r.get(2)? }),
+            )?)
+        })
+        .await
+    }
+
+    pub async fn twitch_select(&self, id: &str) -> Result<()> {
+        let id = id.to_owned();
+        self.with(move |db| {
+            let exists: bool =
+                db.query_row("SELECT EXISTS(SELECT 1 FROM twitch_profiles WHERE id = ?1)", [&id], |r| r.get(0))?;
+            if !exists {
+                bail!("no such Twitch profile");
+            }
+            db.execute("UPDATE settings SET value = ?1 WHERE key = 'twitch_active_profile'", [id])?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn twitch_remove(&self, id: &str) -> Result<()> {
+        let id = id.to_owned();
+        self.with(move |db| {
+            if id == "guest" {
+                bail!("Guest cannot be removed");
+            }
+            let transaction = db.transaction()?;
+            transaction.execute(
+                "UPDATE settings SET value = 'guest' WHERE key = 'twitch_active_profile' AND value = ?1",
+                [&id],
+            )?;
+            transaction.execute("DELETE FROM twitch_profiles WHERE id = ?1", [id])?;
+            transaction.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
     pub async fn cache_get(&self, profile: &str, key: &str) -> Result<Option<String>> {
         let profile = profile.to_owned();
         let key = key.to_owned();

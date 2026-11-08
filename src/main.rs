@@ -8,6 +8,7 @@ mod playback;
 mod player;
 mod profiles;
 mod remote;
+mod twitch;
 mod ytdlp;
 
 use std::net::{Ipv4Addr, SocketAddr};

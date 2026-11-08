@@ -1,6 +1,6 @@
 # Twitch mode
 
-Status: **planned** (written 2026-11-08), nothing implemented. A second mode of CouchTube for Twitch, used the same way as the YouTube side: keyboard only, fullscreen, from the couch. Many details of Twitch's APIs below come from memory of their public docs and are marked **verify** where a wrong guess would change the design.
+Status: **in progress** (written 2026-11-08). Build step 1 is implemented (mode choice screen, per-mode active profile, Twitch profiles and Guest); everything after it is still planned. A second mode of CouchTube for Twitch, used the same way as the YouTube side: keyboard only, fullscreen, from the couch. Many details of Twitch's APIs below come from memory of their public docs and are marked **verify** where a wrong guess would change the design.
 
 **Decisions (2026-11-08):** (1) ads are handled best-effort with uBlock Origin; (2) the **first screen** is a choice between **YouTube** and **Twitch**; (3) Twitch has its **own, separate profiles**, not shared with the YouTube ones.
 
@@ -102,7 +102,7 @@ Results are cached per profile for a short time (live data about 1 minute, categ
 
 ## Build order
 
-1. [ ] Mode choice screen (YouTube / Twitch), per-mode active profile, Twitch profiles and Guest (`twitch_profiles` table, picker).
+1. [x] Mode choice screen (YouTube / Twitch), per-mode active profile, Twitch profiles and Guest. Implemented 2026-11-08: `GET/PUT /api/mode`, `GET/POST /api/twitch/profiles`, `DELETE /api/twitch/profiles/<id>`, `POST /api/twitch/profiles/<id>/select` in `src/twitch.rs`; `ModeGate.tsx` and `TwitchGate.tsx` in the frontend; a **Switch service** item in the YouTube Home menu. The Twitch side stops at a placeholder page after choosing a profile. Unit-tested and the endpoints were tried with curl; not yet seen on screen (see `TODO.md`). The kiosk's start URL did not need to change: `/` now simply opens the mode choice.
 2. [ ] `twitch.rs` with an app token only: Top Games, Streams by category, Search; Twitch screens as a guest; client id setting and the "not set up" screen.
 3. [ ] `twitch.html` player page for live streams, reporting through `/api/player/report`; check on the real TV that the embed plays with `parent=127.0.0.1` and what ads do with uBlock Origin.
 4. [ ] Device-code login per Twitch profile, token storage and refresh, the **Following** row.
@@ -115,4 +115,4 @@ Results are cached per profile for a short time (live data about 1 minute, categ
 - **Ads in the embed:** decided to try uBlock Origin first; how well it works is only known on the real TV with a non-subscribed account. Step 7 exists only if it is not good enough.
 - **`parent` on a bare IP:** if Twitch refuses `127.0.0.1`, options are a `localhost` host name (the backend already accepts `localhost:<port>`), or fetching the stream with streamlink and playing it in mpv only.
 - **Auto-start in the last mode:** the mode choice always shows first for now. A setting to skip it could come later.
-- **Existing profiles screen:** the YouTube "Who's watching?" screen is now reached through the mode choice, so its Esc/back behaviour and the kiosk's start URL need a small change (the appliance should still boot straight to the first screen).
+- **Mode choice and the remembered mode:** the choice screen highlights the last used service but always shows. Esc on a YouTube or Twitch profile list returns to it.

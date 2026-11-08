@@ -121,6 +121,22 @@ export async function removeProfile(id: string) {
   if (!response.ok) throw new Error(body?.error ?? `request failed (${response.status})`)
 }
 
+export type Mode = 'youtube' | 'twitch'
+export const getMode = () => playback<{ mode: Mode | null }>('mode').then((r) => r.mode)
+export const setMode = (mode: Mode) =>
+  fetch('/api/mode', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) })
+    .then(async (res) => { if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `request failed (${res.status})`) })
+
+/** Twitch profiles are their own list; they share nothing with the YouTube profiles above. */
+export type TwitchProfile = { id: string; name: string; color: string }
+export const twitchProfiles = () => playback<{ profiles: TwitchProfile[]; active_id: string }>('twitch/profiles')
+export const createTwitchProfile = (name: string, color: string) => playback<TwitchProfile>('twitch/profiles', { name, color })
+export const selectTwitchProfile = (id: string) => playback<TwitchProfile>(`twitch/profiles/${encodeURIComponent(id)}/select`, {})
+export async function removeTwitchProfile(id: string) {
+  const response = await fetch(`/api/twitch/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? `request failed (${response.status})`)
+}
+
 let profileScope = 'guest'
 export function setProfileScope(id: string) {
   // Drop pending responses from the previous account as well as its browser cache.

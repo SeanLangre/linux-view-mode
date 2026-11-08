@@ -20,6 +20,13 @@ Checklist for the [roadmap](docs/roadmap.md). Remove items once they are verifie
 - [ ] **W** marks a video watched (badge appears, it leaves For You) and clears it again; the **History** button opens CouchTube's own history
 - [ ] Tune scoring (weights in `src/discover.rs`) after a week of real use
 
+## Twitch mode, step 1 (implemented 2026-11-08, see [`docs/twitch-mode.md`](docs/twitch-mode.md); endpoints tried with curl, not seen on screen)
+
+- [ ] First screen shows **YouTube** and **Twitch**; the last used one is highlighted and Enter picks it; ← → move
+- [ ] YouTube: the profile screen and Home work as before; Esc on the profile list and Home → **Switch service** return to the choice
+- [ ] Twitch: add a profile, pick it, switch profile, remove it with **D** (Guest can't be removed); YouTube profiles are not affected
+- [ ] Restart the backend: the last mode and each service's active profile are remembered
+
 ## Known issues
 
 - [ ] Channel pages sometimes give no view count or upload date for a video (seen on a Safiya Nygaard upload); the card then shows none. For You fills it from other lists or looks it up; the channel screen does not.

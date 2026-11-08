@@ -67,13 +67,16 @@ src/
   discover.rs     For You discovery and ranking
   remote.rs       phone remote (port 7880, off until switched on) and remote.html
   cec.rs          HDMI-CEC TV power
+  twitch.rs       Twitch mode: saved mode, Twitch profiles (see [`twitch-mode.md`](twitch-mode.md))
   vendor/         nacl.min.js (tweetnacl, inlined into the phone page)
   db.rs           SQLite profiles, progress, metadata, queue and per-profile cache
 frontend/         Vite + React + TS
   src/App.tsx     screens, back stack, keyboard handling
   src/nav.ts      2D focus logic (unit-tested in nav.test.ts)
   src/api.ts      API client with a 10-minute cache
-  src/ProfileGate.tsx  Who's watching, sign-in and phone pairing screens
+  src/ModeGate.tsx     first screen: YouTube or Twitch
+  src/ProfileGate.tsx  YouTube Who's watching, sign-in and phone pairing screens
+  src/TwitchGate.tsx   Twitch Who's watching screen
   src/format.ts, recent.ts  time formatting, recent searches
   src/styles.css  10-foot styling (1rem = 1/80 of screen width)
 config/
@@ -102,6 +105,7 @@ The full, current API table is in the [README](../README.md#api).
 - `feed_cache(profile_id, cache_key, json, expires_at)` stores feed/search/channel responses
 - `seeds` and `dismissed` back For You (see [`for-you.md`](for-you.md))
 - `remote_devices` holds the phone remote's paired phones (token hashes only)
+- `twitch_profiles` is a separate list from `profiles` (its own Guest); `settings` also keeps `mode` and `twitch_active_profile`
 
 ## Security rules
 

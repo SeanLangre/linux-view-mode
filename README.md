@@ -5,7 +5,7 @@ A fullscreen, keyboard-only YouTube app for a TV. It runs on an Arch Linux box c
 - **Backend:** Rust + Axum on `127.0.0.1:7878`. Runs `yt-dlp` for search and channel pages, tracks playback, and plays videos in the Firefox window (YouTube's embedded player), with `mpv` as the fallback.
 - **Frontend:** React + TypeScript + Vite, shown in Firefox kiosk mode.
 
-Design notes live in [`docs/`](docs/): [`design.md`](docs/design.md) (decisions, architecture, security rules), [`accounts.md`](docs/accounts.md) (profiles, sign-in, feeds), [`phone-signin-encryption.md`](docs/phone-signin-encryption.md), [`for-you.md`](docs/for-you.md), [`server.md`](docs/server.md) (TV server setup and checks) and [`roadmap.md`](docs/roadmap.md), [`legacy-mpv.md`](docs/legacy-mpv.md) (mpv, no longer the main player). Planned: [`twitch-mode.md`](docs/twitch-mode.md) (Twitch mode). The working checklist is [`TODO.md`](TODO.md).
+Design notes live in [`docs/`](docs/): [`design.md`](docs/design.md) (decisions, architecture, security rules), [`accounts.md`](docs/accounts.md) (profiles, sign-in, feeds), [`phone-signin-encryption.md`](docs/phone-signin-encryption.md), [`for-you.md`](docs/for-you.md), [`server.md`](docs/server.md) (TV server setup and checks) and [`roadmap.md`](docs/roadmap.md), [`legacy-mpv.md`](docs/legacy-mpv.md) (mpv, no longer the main player). In progress: [`twitch-mode.md`](docs/twitch-mode.md) (Twitch mode). The working checklist is [`TODO.md`](TODO.md).
 
 ## Playback in the CouchTube window
 
@@ -45,7 +45,7 @@ cargo run
 firefox --kiosk http://127.0.0.1:7878
 ```
 
-CouchTube opens on **Who’s watching?** Choose Guest to browse signed out, or Add profile to connect an account.
+CouchTube opens on **What are we watching?**: choose **YouTube** or **Twitch** (the one used last is highlighted). Each service has its own **Who’s watching?** screen and its own profiles. On the YouTube one, choose Guest to browse signed out, or Add profile to connect an account. Esc on a profile screen, or **Switch service** in the YouTube Home menu, returns to the choice. Twitch mode is being built (see [`docs/twitch-mode.md`](docs/twitch-mode.md)): so far only Twitch profiles exist.
 
 Firefox in kiosk mode has no window controls: close it with **Alt+F4**.
 
@@ -183,6 +183,10 @@ mpv settings (1080p cap, VA-API, SponsorBlock script, `ytdl-format`) are in [`do
 | GET/PUT | `/api/remote` | Phone remote state `{enabled, devices, url, svg, code, confirmed}`; PUT `{enabled}` opens or closes its LAN port |
 | POST | `/api/remote/pair`, `/confirm`, `/reject` | Start a pairing link (10 minutes, one use), accept the phone's code `{code}`, or refuse it |
 | DELETE | `/api/remote/devices` | Forget every paired phone |
+| GET/PUT | `/api/mode` | GET `{mode}` (`youtube`, `twitch` or `null` before the first choice); PUT `{mode}` saves the choice and stops playback |
+| GET/POST | `/api/twitch/profiles` | Twitch profiles `{profiles: [{id, name, color}], active_id}` (a list separate from `/api/profiles`, with its own Guest); POST `{name, color?}` creates one |
+| DELETE | `/api/twitch/profiles/<id>` | Removes a Twitch profile (Guest can't be removed); the active one falls back to Guest |
+| POST | `/api/twitch/profiles/<id>/select` | Selects the active Twitch profile and stops playback |
 | GET | `/api/health` | `{"status":"ok"}` |
 | GET | `/api/check` | Diagnostics for the active profile: whether history loads and whether a sample of its videos and thumbnails are available |
 | GET | `/api/feed/<kind>` | Video list: `foryou`, `continue`, `local` (CouchTube's own history), `recommended`, `subscriptions`, `history`, `watchlater`, `liked`; `?refresh=true` bypasses the feed cache; every list carries the profile's `completed` / `resume_position` |
@@ -226,8 +230,8 @@ lua tests/sponsorblock_test.lua     # needs Lua; tests SponsorBlock without netw
 ## Project layout
 
 ```
-src/            Rust backend (main.rs, api.rs, ytdlp.rs, player.rs, playback.rs, profiles.rs, pairing.rs, remote.rs, cec.rs, feeds.rs, db.rs, discover.rs for For You)
-frontend/       React app (App.tsx, ProfileGate.tsx, nav.ts, api.ts, styles.css); public/watch.html is the player page
+src/            Rust backend (main.rs, api.rs, ytdlp.rs, player.rs, playback.rs, profiles.rs, pairing.rs, remote.rs, cec.rs, feeds.rs, db.rs, discover.rs for For You, twitch.rs for Twitch mode)
+frontend/       React app (App.tsx, ModeGate.tsx, ProfileGate.tsx, TwitchGate.tsx, nav.ts, api.ts, styles.css); public/watch.html is the player page
 config/mpv/     Legacy mpv settings, keys, SponsorBlock script
 config/firefox/ Account preferences and extension policy
 docs/            Design notes, server setup, roadmap

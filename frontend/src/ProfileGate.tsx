@@ -6,7 +6,7 @@ type View = { kind: 'list' } | { kind: 'add' } | { kind: 'manage' | 'remove'; pr
 const COLORS = ['#6288d9', '#c7799e', '#53a888', '#cb9a53', '#927bd4', '#dc7474']
 const BUSY_STATES = new Set(['signing_in', 'checking'])
 
-export default function ProfileGate() {
+export default function ProfileGate({ onService }: { onService: () => void }) {
   const [profiles, setProfiles] = useState<api.Profile[]>([])
   const [active, setActive] = useState<api.Profile | null>(null)
   const [view, setView] = useState<View>({ kind: 'list' })
@@ -128,7 +128,9 @@ export default function ProfileGate() {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape' || (event.key === 'Backspace' && !(event.target instanceof HTMLInputElement))) {
         event.preventDefault()
-        back()
+        // On the profile list, back leads to the service choice.
+        if (view.kind === 'list' && !busy) onService()
+        else back()
         return
       }
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return
@@ -152,7 +154,7 @@ export default function ProfileGate() {
     return () => window.removeEventListener('keydown', onKeyDown)
   })
 
-  if (active) return <App key={active.id} profile={active} onSwitch={() => { setActive(null); setView({ kind: 'list' }); void refresh().catch((err: Error) => setError(err.message)) }} />
+  if (active) return <App key={active.id} profile={active} onService={onService} onSwitch={() => { setActive(null); setView({ kind: 'list' }); void refresh().catch((err: Error) => setError(err.message)) }} />
 
   return (
     <main className="app profiles-page" ref={panel}>

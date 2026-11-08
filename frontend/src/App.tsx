@@ -33,6 +33,7 @@ const HOME_MENU = [
   { label: 'Subtitles', action: 'subtitles' },
   { label: 'YouTube TV', action: 'youtube-tv' },
   { label: 'Phone remote', action: 'remote' },
+  { label: 'Switch service', action: 'service' },
   { label: 'Turn TV off', action: 'tv-off' },
   { label: 'Exit to desktop', action: 'exit' },
 ]
@@ -56,7 +57,7 @@ const ARROWS: Record<string, Direction> = {
   ArrowRight: 'right',
 }
 
-export default function App({ profile, onSwitch }: { profile: api.Profile; onSwitch: () => void }) {
+export default function App({ profile, onSwitch, onService }: { profile: api.Profile; onSwitch: () => void; onService: () => void }) {
   const [stack, setStack] = useState<Entry[]>([{ screen: { kind: 'home' }, focus: START }])
   const [recent, setRecent] = useState(() => loadRecent(profile.id))
   const [draft, setDraft] = useState('')
@@ -365,6 +366,7 @@ export default function App({ profile, onSwitch }: { profile: api.Profile; onSwi
         if (action === 'queue') push({ kind: 'queue' })
         else if (action === 'foryou') push({ kind: 'foryou' })
         else if (action === 'remote') push({ kind: 'remote' })
+        else if (action === 'service') onService()
         else if (action?.startsWith('remote-')) void remoteAction(action)
         else if (action === 'youtube-tv') void api.youtubeTv().then(() => notify('YouTube TV is opening. Close its window (Alt+F4) to come back.'), (err: Error) => notify(err.message))
         else if (action === 'tv-off') void api.tvPower(false).then(() => notify('Turning the TV off…'), (err: Error) => notify(err.message))
