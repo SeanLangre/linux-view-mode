@@ -45,7 +45,7 @@ cargo run
 firefox --kiosk http://127.0.0.1:7878
 ```
 
-CouchTube opens on **What are we watching?**: choose **YouTube** or **Twitch** (the one used last is highlighted). Each service has its own **Who’s watching?** screen and its own profiles. On the YouTube one, choose Guest to browse signed out, or Add profile to connect an account. Esc on a profile screen, or **Switch service** in the YouTube Home menu, returns to the choice. Twitch mode is being built (see [`docs/twitch-mode.md`](docs/twitch-mode.md)): so far you can browse top live streams, categories and channel search, with no Twitch account or registration needed (it uses Twitch's unofficial web API); you can also **watch a live channel**: Enter on a stream opens Twitch's player in the CouchTube window (**Space** pause, **9**/**0** volume, **M** mute, **Esc** stop). VODs, chat, following and the phone remote's Twitch screens come later.
+CouchTube opens on **What are we watching?**: choose **YouTube** or **Twitch** (the one used last is highlighted). Each service has its own **Who’s watching?** screen and its own profiles. On the YouTube one, choose Guest to browse signed out, or Add profile to connect an account. Esc on a profile screen, or **Switch service** in the YouTube Home menu, returns to the choice. Twitch mode is being built (see [`docs/twitch-mode.md`](docs/twitch-mode.md)): so far you can browse top live streams, categories and channel search, with no Twitch account or registration needed (it uses Twitch's unofficial web API); you can sign a Twitch profile in (**S** on the profile list; Firefox on Twitch's login page, with the phone keyboard) so **Following** lists the channels you follow, and you can also **watch a live channel**: Enter on a stream opens Twitch's player in the CouchTube window (**Space** pause, **9**/**0** volume, **M** mute, **Esc** stop). VODs, chat, following and the phone remote's Twitch screens come later.
 
 Firefox in kiosk mode has no window controls: close it with **Alt+F4**.
 
@@ -175,7 +175,7 @@ mpv settings (1080p cap, VA-API, SponsorBlock script, `ytdl-format`) are in [`do
 | DELETE | `/api/profiles/<id>` | Removes the profile and its local sign-in files |
 | POST | `/api/profiles/<id>/select` | Selects a profile and stops playback |
 | POST | `/api/profiles/<id>/signin` | Opens that profile’s Firefox sign-in window |
-| GET/POST/DELETE | `/api/pairing` | Phone URL and QR code (SVG) while a sign-in is in progress, otherwise 404; POST starts it before Firefox opens (the login page does this when it opens), DELETE cancels it if no window is open |
+| GET/POST/DELETE | `/api/pairing` | Phone URL and QR code (SVG) while a sign-in is in progress, otherwise 404; POST starts it (`?service=twitch` for a Twitch sign-in) before Firefox opens (the login page does this when it opens), DELETE cancels it if no window is open |
 | PUT | `/api/profiles/<id>/subtitles` | Body `{language}` (`en`, `pt-BR`, …; `null` = off); saved per profile and used for every video |
 | GET | `/api/profiles/<id>/status` | `{state, message}`; `?check=true` starts a login check |
 | POST | `/api/system/exit` | Stops the kiosk service (only when it runs as the systemd unit) |
@@ -189,6 +189,9 @@ mpv settings (1080p cap, VA-API, SponsorBlock script, `ytdl-format`) are in [`do
 | DELETE | `/api/twitch/profiles/<id>` | Removes a Twitch profile (Guest can't be removed); the active one falls back to Guest |
 | POST | `/api/twitch/profiles/<id>/select` | Selects the active Twitch profile and stops playback |
 | POST | `/api/twitch/play` | Body `{login}`; starts a live Twitch channel in the CouchTube window (`/api/status` then shows `page: /twitch.html?…`, `id: twitch:<login>`); an offline channel or other failure appears as `error` there |
+| POST | `/api/twitch/profiles/<id>/signin` | Opens Firefox on Twitch's login page in that profile's own folder (phone keyboard as for YouTube); closes itself once the login cookie appears |
+| GET | `/api/twitch/profiles/<id>/status` | `{state, message}` like YouTube's; `?check=true` asks Twitch who the saved login belongs to |
+| GET | `/api/twitch/following` | Live channels the active Twitch profile follows `{items, cursor: null}`; 409 for Guest, an unsigned profile or a rejected login |
 | GET | `/api/twitch/status` | `{source}`: `unofficial` (default) or `official` (both Twitch credentials set) |
 | GET | `/api/twitch/categories`, `/streams`, `/search` | Twitch pages `{items, cursor}`: top categories; live streams (`?game_id=` for one category); channel search (`?q=`). All take `cursor` and `refresh=true`; with the unofficial source a cursor is the next page size (`n48`) |
 | GET | `/api/health` | `{"status":"ok"}` |
@@ -221,14 +224,13 @@ cd frontend && npx vitest run       # navigation, API caching, recent searches
 npm run lint && npm run build       # lint + type-check
 ```
 
-The optional playback smoke test uses real mpv with a generated local audio file, with screen and sound output disabled. It needs permission to bind loopback and Unix sockets:
+The smoke tests start the real backend with fake `firefox`, `yt-dlp` and Twitch servers (no network, no real accounts) and need permission to bind loopback:
 
 ```bash
-cargo build && python3 tests/playback_smoke.py
-python3 tests/feeds_smoke.py        # simulated feeds, queue, progress and watched sync
-python3 tests/profiles_smoke.py     # simulated accounts; no real browser or Google sessions
-python3 tests/twitch_smoke.py       # Twitch browsing (unofficial and official sources) against fake Twitch servers; add --browser for the keyboard UI (needs Chromium and Node 22+)
-python3 tests/profiles_smoke.py --browser  # keyboard UI check; needs Chromium and Node 22+
+cargo build
+python3 tests/profiles_smoke.py     # simulated YouTube accounts and sign-in
+python3 tests/twitch_smoke.py       # Twitch browsing, watching, sign-in and Following (unofficial and official sources)
+python3 tests/feeds_smoke.py        # simulated feeds, queue, progress and watched sync (currently failing, see TODO.md)
 lua tests/sponsorblock_test.lua     # needs Lua; tests SponsorBlock without network access
 ```
 

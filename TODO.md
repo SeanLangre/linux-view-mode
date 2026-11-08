@@ -31,7 +31,6 @@ Checklist for the [roadmap](docs/roadmap.md). Remove items once they are verifie
 
 - [ ] On the TV: Top live streams, Categories (6 per row), a category's streams and Search load with real pictures; Load more works; `u` refreshes; Esc returns with the focus on the card you left
 - [ ] Watch for the unofficial source breaking (it is not a supported API): if the screens show "could not reach Twitch", read the backend log; the client id repairs itself, but a schema or integrity-check change needs `src/gql.rs` updated
-- [ ] **Register a Twitch application** (see "Registering later" in the doc) before step 4 (Following); then check the official source against the real Helix API: top games, streams with `game_id`, search, Load more with cursors, token renewal
 
 ## Twitch mode, step 3: watching (implemented 2026-11-08, see [`docs/twitch-mode.md`](docs/twitch-mode.md); played in Firefox 159 against the real Twitch, not yet on the TV)
 
@@ -42,6 +41,15 @@ Checklist for the [roadmap](docs/roadmap.md). Remove items once they are verifie
 - [ ] Phone remote while watching: pause, volume and mute reach the Twitch page (seek, subtitles and next do nothing)
 - [ ] Leaving Twitch (Esc to the profile list, **Switch service**) while a stream plays stops it
 - [ ] Playback quality and CPU on the RN96 (Twitch picks the quality; check 1080p60 is smooth)
+
+## Twitch mode, step 4: sign-in and Following (implemented 2026-11-08, see [`docs/twitch-mode.md`](docs/twitch-mode.md); tested against fakes only, **never with a real Twitch login**)
+
+- [ ] Twitch → profile list → **Add profile** → name → the sign-in screen: Open Firefox sign-in opens Twitch's login page; after you log in the window closes by itself within a few seconds and the screen says "Signed in to Twitch as <you>". If the window never closes, the cookie is not called `auth-token` (check with `sqlite3` on a copy of `~/.local/share/couchtube/twitch/<id>/firefox/cookies.sqlite`)
+- [ ] **Phone keyboard on Twitch:** scan the QR code, check the phone says "Twitch" and the codes match, press Yes. Step 1 types the username and presses **Tab**, step 2 types the password and presses Enter (Twitch's form has both fields on one page). If the first step submits or lands in the wrong field, change `Flow::submit_key` in `src/pairing.rs`
+- [ ] Twitch asks for a verification code (two-step): step 3 on the phone types it
+- [ ] **Following** (first item on the Twitch Home menu for a signed-in profile) lists the channels you follow that are live, most watched first. If it says Twitch did not accept the saved sign-in, the web API refused the cookie (or its integrity check); the fallback is the official device-code login
+- [ ] **S** on a Twitch profile re-opens the sign-in; removing the profile deletes its folder; Guest never shows Following
+- [ ] Optional: register a Twitch application (see "Registering later" in the doc) for a supported API; then check the official source against the real Helix API: top games, streams with `game_id`, search, Load more with cursors, token renewal
 
 ## Known issues
 

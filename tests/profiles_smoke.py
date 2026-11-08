@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Profile integration test with fake Firefox/yt-dlp/mpv; never reads real cookies.
-Run `cargo build`, then `python3 tests/profiles_smoke.py [--browser]`.
+Run `cargo build`, then `python3 tests/profiles_smoke.py`.
 The optional keyboard UI check needs system Chromium and Node 22+.
 """
 import json
@@ -116,10 +116,12 @@ else:
                 assert "--ignore-config" in args and args[args.index("--cookies-from-browser") + 1] == cookie_arg(alice)
                 assert request("channel/UCSMOQeBJ2RAnuFungnQOxLg")[0] == 200
                 assert cookie_arg(alice) in logged("yt-dlp")[-1]["args"]
+                # Videos play in the CouchTube window (Firefox): the status names the player page, mpv is not
+                # started, and the signed-in cookies stay out of the interface's player.
                 assert request("play", {"id": "aqz-KE-bpKQ"})[0] == 200
-                wait_for(lambda: logged("mpv"))
-                args = logged("mpv")[-1]["args"]
-                assert f"--ytdl-raw-options-append=cookies-from-browser={cookie_arg(alice)}" in args
+                status = request("status")[1]
+                assert status["playing"] and status["page"].startswith("/watch.html?v=aqz-KE-bpKQ&s="), status
+                assert not logged("mpv"), "mpv must not start while the Firefox player is used"
                 assert request(f"profiles/{alice['id']}/signin", {})[1]["state"] == "signing_in"
                 assert request("status")[1]["playing"] is False
                 wait_for(lambda: logged("firefox"))
@@ -141,8 +143,8 @@ else:
                 request("search?q=guest")
                 assert "--cookies-from-browser" not in [call for call in logged("yt-dlp") if call["args"][-1] == "ytsearch24:guest"][-1]["args"]
                 request("play", {"id": "aqz-KE-bpKQ"})
-                wait_for(lambda: len(logged("mpv")) == 2)
-                assert not any("cookies-from-browser" in argument for argument in logged("mpv")[-1]["args"])
+                assert request("status")[1]["page"].startswith("/watch.html?v=aqz-KE-bpKQ&s=")
+                assert not logged("mpv")
                 request(f"profiles/{alice['id']}/select", {})
                 assert request("status")[1]["playing"] is False
                 assert request(f"profiles/{alice['id']}", method="DELETE")[0] == 200
@@ -150,9 +152,6 @@ else:
                 assert not (directory / "data/profiles" / alice["id"]).exists()
                 assert (directory / "data/profiles" / bob["id"]).exists()
                 (directory / "fail-login").unlink()
-                if "--browser" in sys.argv:
-                    subprocess.run(["node", str(root / "tests/profiles_browser.mjs"),
-                                    f"http://127.0.0.1:{port}", str(directory)], check=True, timeout=60)
                 # Persist profiles and active selection across backend restarts.
                 request(f"profiles/{bob['id']}/select", {})
                 backend.terminate()

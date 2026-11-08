@@ -9,7 +9,11 @@
 //! * Any `after:` cursor trips Twitch's integrity check (verified 2026-11-08), so "load more" asks
 //!   for a bigger first page instead (24, 48, … up to Twitch's limits), and the page skips cards
 //!   it already has.
-//! * Read-only, public data, no login. Following needs the official API (a user token).
+//! * Public data needs no login. **Following** needs one: the Twitch sign-in in the profile's own
+//!   Firefox folder leaves an `auth-token` cookie, which is sent as `Authorization: OAuth <token>`,
+//!   the way twitch.tv's own pages do (see `profiles/twitch_login.rs`). That the website's web API
+//!   accepts that cookie from here is **not yet verified with a real login**; the query shapes and
+//!   the 401 for a bad token are (2026-11-08).
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
@@ -37,6 +41,8 @@ const CATEGORIES: &str = "query($first:Int!){games(first:$first){edges{node{id n
 const STREAM_FIELDS: &str = "id title viewersCount createdAt previewImageURL(width:440,height:248) broadcaster{login displayName} game{id name}";
 const GAME_STREAMS: &str = "query($id:ID!,$first:Int!){game(id:$id){streams(first:$first){edges{node{FIELDS}}}}}";
 const TOP_STREAMS: &str = "query($first:Int!){streams(first:$first){edges{node{FIELDS}}}}";
+const CURRENT_USER: &str = "query{currentUser{login displayName}}";
+const FOLLOWING: &str = "query{currentUser{followedLiveUsers(first:100){edges{node{login displayName stream{id title viewersCount previewImageURL(width:440,height:248) game{id name} createdAt}}}}}}";
 const SEARCH: &str = "query($q:String!){searchFor(userQuery:$q,platform:\"web\",options:{targets:[{index:CHANNEL}]}){channels{edges{item{... on User{login displayName profileImageURL(width:150) broadcastSettings{title game{name}} stream{id}}}}}}}";
 
 struct Inner {
@@ -50,6 +56,31 @@ struct Inner {
 
 #[derive(Clone)]
 pub struct Gql(Arc<Inner>);
+
+/// Twitch refused the login cookie (an invalid or expired token, or no signed-in user): the profile
+/// has to sign in again.
+#[derive(Debug)]
+pub struct SignedOut;
+
+impl std::fmt::Display for SignedOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Twitch does not accept this sign-in")
+    }
+}
+
+impl std::error::Error for SignedOut {}
+
+/// The login cookie's value. Checked before it goes into a curl config: 20-64 letters and digits.
+pub fn valid_token(token: &str) -> bool {
+    (20..=64).contains(&token.len()) && token.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// A signed-in request: whose answers these are (the cache is kept per profile) and the token.
+#[derive(Clone, Copy)]
+struct Auth<'a> {
+    scope: &'a str,
+    token: &'a str,
+}
 
 impl Gql {
     pub fn from_env() -> Self {
@@ -69,9 +100,21 @@ impl Gql {
 
     /// Runs one GraphQL query (user text only ever travels in `variables`) and returns its `data`.
     async fn query(&self, query: &str, variables: Value, ttl: Duration, refresh: bool) -> Result<Value> {
+        self.run(query, variables, ttl, refresh, None).await
+    }
+
+    async fn run(&self, query: &str, variables: Value, ttl: Duration, refresh: bool, auth: Option<Auth<'_>>) -> Result<Value> {
+        if auth.is_some_and(|a| !valid_token(a.token)) {
+            return Err(SignedOut.into());
+        }
         let body = json!({ "query": query, "variables": variables }).to_string();
+        // Personal answers are cached per profile, never shared.
+        let key = match auth {
+            Some(a) => format!("{}{body}", scope_prefix(a.scope)),
+            None => body.clone(),
+        };
         if !refresh {
-            if let Some(hit) = self.0.cache.get(&body, ttl) {
+            if let Some(hit) = self.0.cache.get(&key, ttl) {
                 return Ok(hit);
             }
         }
@@ -79,7 +122,10 @@ impl Gql {
         let mut answer = None;
         for attempt in 0..2 {
             let id = self.0.client_id.lock().await.clone();
-            let (status, text) = curl(post_config(&self.0.url, &id, &body)).await?;
+            let (status, text) = curl(post_config(&self.0.url, &id, &body, auth.map(|a| a.token))).await?;
+            if status == 401 && auth.is_some() {
+                return Err(SignedOut.into());
+            }
             // Twitch rotated the website's client id: read the current one from twitch.tv, once.
             if status == 400 && attempt == 0 && text.contains("Client-ID") {
                 let fresh = self.discover_client_id().await?;
@@ -99,8 +145,35 @@ impl Gql {
             bail!("Twitch refused the query: {reason}");
         }
         let data = answer["data"].clone();
-        self.0.cache.put(body, data.clone());
+        self.0.cache.put(key, data.clone());
         Ok(data)
+    }
+
+    /// The display name of the signed-in user, or `None` if Twitch sees nobody signed in with this
+    /// token. Never cached.
+    pub async fn current_user(&self, token: &str) -> Result<Option<String>> {
+        let auth = Auth { scope: "check", token };
+        let data = self.run(CURRENT_USER, json!({}), TTL_LIVE, true, Some(auth)).await?;
+        let user = &data["currentUser"];
+        Ok(user.is_object().then(|| {
+            let name = text(user, "displayName");
+            if name.is_empty() { text(user, "login") } else { name }
+        }))
+    }
+
+    /// The followed channels that are live right now, most watched first. `scope` is the profile.
+    pub async fn followed_streams(&self, scope: &str, token: &str, refresh: bool) -> Result<Vec<Stream>> {
+        let auth = Auth { scope, token };
+        let data = self.run(FOLLOWING, json!({}), TTL_LIVE, refresh, Some(auth)).await?;
+        if !data["currentUser"].is_object() {
+            return Err(SignedOut.into());
+        }
+        Ok(parse_followed(&data))
+    }
+
+    /// Forget this profile's personal answers (after it signs in again, or is removed).
+    pub fn forget(&self, scope: &str) {
+        self.0.cache.remove_prefix(&scope_prefix(scope));
     }
 
     async fn discover_client_id(&self) -> Result<String> {
@@ -163,11 +236,18 @@ fn next(asked: usize, got: usize, max: usize) -> Option<String> {
     (got * 10 >= asked * 8 && asked < max).then(|| format!("n{}", (asked + STEP).min(max)))
 }
 
-fn post_config(url: &str, client_id: &str, body: &str) -> String {
+fn post_config(url: &str, client_id: &str, body: &str, token: Option<&str>) -> String {
+    // `valid_token` was checked by the caller, so the token cannot break out of the quotes.
+    let authorization = token.map_or(String::new(), |t| format!("header = \"Authorization: OAuth {t}\"\n"));
     format!(
-        "silent\nshow-error\nmax-time = 15\nurl = \"{url}\"\nrequest = \"POST\"\nheader = \"Client-ID: {client_id}\"\nheader = \"Content-Type: application/json\"\ndata = \"{}\"\nwrite-out = \"\\n%{{http_code}}\"\n",
+        "silent\nshow-error\nmax-time = 15\nurl = \"{url}\"\nrequest = \"POST\"\nheader = \"Client-ID: {client_id}\"\n{authorization}header = \"Content-Type: application/json\"\ndata = \"{}\"\nwrite-out = \"\\n%{{http_code}}\"\n",
         quote(body)
     )
+}
+
+/// Cache keys of one profile's personal answers start with this (the scope is a profile id).
+fn scope_prefix(scope: &str) -> String {
+    format!("{scope}\n")
 }
 
 /// Escapes a value for a double-quoted curl config string.
@@ -211,6 +291,29 @@ pub fn parse_streams(data: &Value) -> Vec<Stream> {
             started_at: s["createdAt"].as_str().map(str::to_owned),
         })
         .collect()
+}
+
+/// The followed users that are live (`stream` is an object), most watched first.
+pub fn parse_followed(data: &Value) -> Vec<Stream> {
+    let mut streams: Vec<Stream> = nodes(&data["currentUser"]["followedLiveUsers"], "node")
+        .iter()
+        .filter(|u| u["stream"].is_object() && is_login(u["login"].as_str().unwrap_or_default()))
+        .map(|u| {
+            let s = &u["stream"];
+            Stream {
+                login: text(u, "login"),
+                name: text(u, "displayName"),
+                title: text(s, "title"),
+                game_id: text(&s["game"], "id"),
+                game_name: text(&s["game"], "name"),
+                viewers: s["viewersCount"].as_u64().unwrap_or(0),
+                thumb: image(text(s, "previewImageURL")),
+                started_at: s["createdAt"].as_str().map(str::to_owned),
+            }
+        })
+        .collect();
+    streams.sort_by(|a, b| b.viewers.cmp(&a.viewers));
+    streams
 }
 
 pub fn parse_channels(data: &Value) -> Vec<Channel> {
@@ -275,7 +378,7 @@ mod tests {
     fn user_text_survives_the_curl_config_unchanged() {
         for text in ["plain", "a \"b\" \\ c\nd\te", "%{http_code} \" \n data = \"x\"", "ünï 🔴"] {
             let body = json!({ "query": "q", "variables": { "q": text } }).to_string();
-            let config = post_config("https://gql.twitch.tv/gql", "id0123456789", &body);
+            let config = post_config("https://gql.twitch.tv/gql", "id0123456789", &body, None);
             let lines: Vec<&str> = config.lines().filter(|l| l.starts_with("data = ")).collect();
             // Exactly one `data` line, so the text cannot add options of its own.
             assert_eq!(lines.len(), 1, "{text:?}");
@@ -286,11 +389,17 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_client_id_from_the_website() {
-        assert_eq!(client_id_from_page("x clientId=\"kimne78kx3ncx6brgo4mv6wki5h1ko\" y").as_deref(), Some("kimne78kx3ncx6brgo4mv6wki5h1ko"));
-        assert_eq!(client_id_from_page("clientId=\"short\""), None);
-        assert_eq!(client_id_from_page("clientId=\"has space in it 0123456789012\""), None);
-        assert_eq!(client_id_from_page("nothing here"), None);
+    fn the_login_token_is_checked_before_it_goes_into_a_request() {
+        assert!(valid_token("abcdefghijklmnopqrstuvwxyz0123"));
+        for bad in ["", "short", "has space has space has spac", "quote\"quote\"quote\"quote\"", "new\nline0123456789012345678", &"a".repeat(65)] {
+            assert!(!valid_token(bad), "{bad:?}");
+        }
+        let body = json!({"query": "q", "variables": {}}).to_string();
+        let plain = post_config("https://gql.twitch.tv/gql", "id0123456789", &body, None);
+        let signed = post_config("https://gql.twitch.tv/gql", "id0123456789", &body, Some("abcdefghijklmnopqrstuvwxyz0123"));
+        assert!(!plain.contains("Authorization"));
+        assert_eq!(signed.matches("header = \"Authorization: OAuth abcdefghijklmnopqrstuvwxyz0123\"").count(), 1);
+        assert_eq!(signed.lines().count(), plain.lines().count() + 1, "exactly one more line");
     }
 
     // Shapes captured from the live endpoint on 2026-11-08.

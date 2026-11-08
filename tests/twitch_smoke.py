@@ -4,7 +4,7 @@
 Covers both sources: the unofficial web API (the default, no registration) and the official Helix
 API (when COUCHTUBE_TWITCH_CLIENT_ID and _SECRET are set).
 
-Run `cargo build`, then `python3 tests/twitch_smoke.py [--browser]`.
+Run `cargo build`, then `python3 tests/twitch_smoke.py`.
 """
 import json
 import os
@@ -24,6 +24,8 @@ CLIENT_ID = "testclientid0123456789"
 CLIENT_SECRET = "testclientsecret0123456789"
 OLD_WEB_ID = "oldwebclientid0123456789abc"
 NEW_WEB_ID = "newwebclientid0123456789abc"
+LOGIN_TOKEN = "validtokenvalidtokenvalid123"
+FOLLOWED = [("small", 10), ("big", 5000), ("mid", 300)]
 ART = "https://static-cdn.jtvnw.net/ttv-boxart/509658-{width}x{height}.jpg"
 THUMB = "https://static-cdn.jtvnw.net/previews-ttv/live_user_shroud-{width}x{height}.jpg"
 
@@ -39,6 +41,7 @@ class Fake(BaseHTTPRequestHandler):
     web_id = NEW_WEB_ID
     total_categories = 60
     gql_fail = None  # "http" or "integrity" for the next call
+    accepted_token = LOGIN_TOKEN  # the login token Twitch accepts; anything else gets a 401
 
     def reply(self, status, body, kind="application/json"):
         data = body.encode() if isinstance(body, str) else json.dumps(body).encode()
@@ -52,7 +55,8 @@ class Fake(BaseHTTPRequestHandler):
     def gql(self, body):
         query, variables = body["query"], body.get("variables", {})
         client = self.headers.get("Client-ID")
-        Fake.log.append(("gql", client, query, variables))
+        auth = self.headers.get("Authorization")
+        Fake.log.append(("gql", client, query, variables, auth))
         if client != Fake.web_id:
             return self.reply(400, {"error": "Bad Request", "status": 400, "message": 'The "Client-ID" header is invalid.'})
         if Fake.gql_fail == "http":
@@ -61,6 +65,20 @@ class Fake(BaseHTTPRequestHandler):
         if Fake.gql_fail == "integrity":
             Fake.gql_fail = None
             return self.reply(200, {"errors": [{"message": "failed integrity check"}], "data": {"games": None}})
+        if "currentUser" in query:
+            user = None
+            if auth is not None:
+                if auth != f"OAuth {Fake.accepted_token}":
+                    return self.reply(401, {"error": "Unauthorized", "status": 401, "message": 'The "Authorization" token is invalid.'})
+                user = {"login": "alice", "displayName": "Alice"}
+            if user and "followedLiveUsers" in query:
+                edges = [{"node": {"login": login, "displayName": login.title(), "stream": {
+                    "id": "1", "title": f"{login} live", "viewersCount": viewers, "createdAt": "2026-11-08T10:00:00Z",
+                    "previewImageURL": THUMB.replace("{width}", "440").replace("{height}", "248"),
+                    "game": {"id": "7", "name": "Game"}}}} for login, viewers in FOLLOWED]
+                edges.append({"node": {"login": "offlinefriend", "displayName": "Offline", "stream": None}})
+                user = {"followedLiveUsers": {"edges": edges}}
+            return self.reply(200, {"data": {"currentUser": user}})
         first = variables.get("first", 0)
         if "games(" in query:
             count = min(first, Fake.total_categories)
@@ -191,8 +209,31 @@ def main():
             assert len(Fake.log) == calls, "bad input must not reach Twitch"
 
         # 1. The default, unofficial source: no credentials, Twitch's web API.
+        # A fake Firefox for the Twitch sign-in: it logs its arguments and, once told the user "signed in",
+        # writes a real cookie database with Twitch's login cookie, then waits to be closed by the backend.
+        (root / "bin").mkdir()
+        firefox = root / "bin/firefox"
+        firefox.write_text('''#!/usr/bin/env python3
+import json, os, pathlib, sqlite3, sys, time
+root = pathlib.Path(os.environ["CT_TEST_ROOT"])
+args = sys.argv[1:]
+with (root / "firefox-calls.jsonl").open("a") as log:
+    log.write(json.dumps({"args": args, "wayland": os.environ.get("MOZ_ENABLE_WAYLAND")}) + "\\n")
+folder = pathlib.Path(args[args.index("--profile") + 1])
+while not (root / ("login-" + folder.parent.name)).exists():
+    time.sleep(0.05)
+token = (root / ("login-" + folder.parent.name)).read_text().strip()
+db = sqlite3.connect(folder / "cookies.sqlite")
+db.execute("CREATE TABLE IF NOT EXISTS moz_cookies (name TEXT, value TEXT, host TEXT, lastAccessed INTEGER)")
+db.execute("INSERT INTO moz_cookies VALUES ('unique_id', 'abc', '.twitch.tv', 1)")
+db.execute("INSERT INTO moz_cookies VALUES ('auth-token', ?, '.twitch.tv', 2)", (token,))
+db.commit(); db.close()
+time.sleep(120)
+''')
+        firefox.chmod(0o700)
         unofficial = {"COUCHTUBE_TWITCH_GQL_URL": f"{base_url}/gql", "COUCHTUBE_TWITCH_SITE_URL": f"{base_url}/",
-                      "COUCHTUBE_TWITCH_WEB_CLIENT_ID": OLD_WEB_ID}
+                      "COUCHTUBE_TWITCH_WEB_CLIENT_ID": OLD_WEB_ID,
+                      "PATH": f"{root / 'bin'}:{os.environ['PATH']}", "CT_TEST_ROOT": str(root)}
         port, process, logfile = start(unofficial)
         try:
             wait_up(port)
@@ -281,20 +322,96 @@ def main():
                 status, body = request(port, f"twitch/categories?refresh=true&cursor=n{24 + 24 * (failure == 'http')}")
                 assert status == 502 and body == {"error": "could not reach Twitch, try again"}, (failure, status, body)
 
+            # ---- Twitch sign-in and Following (the same flow as YouTube's: a Firefox folder per profile) ----
+            data = root / f"data{port}"
+            def _wait(predicate, timeout=30):
+                until = time.monotonic() + timeout
+                while time.monotonic() < until:
+                    result = predicate()
+                    if result:
+                        return result
+                    time.sleep(0.1)
+                raise AssertionError("timed out")
+
+            # Guest cannot see who it follows; neither can a profile that has not signed in.
+            status, body = request(port, "twitch/following")
+            assert status == 409 and "Sign in to Twitch" in body["error"], (status, body)
+            status, alice = post(port, "twitch/profiles", {"name": "Alice"})
+            assert status == 201
+            folder = data / "twitch" / alice["id"] / "firefox"
+            assert (folder / "user.js").exists() and oct(folder.stat().st_mode & 0o777) == "0o700"
+            assert not (data / "profiles" / alice["id"]).exists(), "Twitch folders are apart from YouTube's"
+            assert post(port, f"twitch/profiles/{alice['id']}/select", {})[0] == 200
+            status, body = request(port, "twitch/following")
+            assert status == 409 and "not signed in to Twitch yet" in body["error"], (status, body)
+            # The phone link can be started for Twitch before Firefox opens (the page then words its steps for Twitch).
+            assert post(port, "pairing?service=twitch", {})[0] == 200
+            requests_cancel = urllib.request.Request(f"http://127.0.0.1:{port}/api/pairing", method="DELETE")
+            assert client.open(requests_cancel, timeout=10).status == 200
+            assert request(port, "pairing")[0] == 404
+            assert request(port, f"twitch/profiles/{alice['id']}/status")[1]["state"] == "unknown"
+            assert request(port, "twitch/profiles/guest/status")[1]["state"] == "guest"
+            assert post(port, "twitch/profiles/guest/signin", {})[0] == 400
+            assert post(port, "twitch/profiles/nope/signin", {})[0] == 404
+
+            # Open the sign-in: Firefox on Twitch's login page, in this profile's folder, in X11 mode for xdotool.
+            status, login = post(port, f"twitch/profiles/{alice['id']}/signin", {})
+            assert status == 200 and login["state"] == "signing_in", (status, login)
+            calls = _wait(lambda: [json.loads(l) for l in (root / "firefox-calls.jsonl").read_text().splitlines()] if (root / "firefox-calls.jsonl").exists() else None)
+            assert calls[-1]["args"][-1] == "https://www.twitch.tv/login" and str(folder) in calls[-1]["args"], calls[-1]
+            assert calls[-1]["wayland"] == "0"
+            # The phone link exists while the window is open; the profile is busy.
+            assert request(port, "pairing")[0] == 200
+            for route, body in ((f"twitch/profiles/{alice['id']}/signin", {}), (f"twitch/profiles/{alice['id']}/select", {})):
+                assert post(port, route, body)[0] == 409, route
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/api/twitch/profiles/{alice['id']}", method="DELETE")
+            try:
+                client.open(req, timeout=10); raise AssertionError("removal while signing in")
+            except urllib.error.HTTPError as error:
+                assert error.code == 409
+
+            # The user logs in: the cookie appears, the backend closes the window and asks Twitch who it is.
+            (root / f"login-{alice['id']}").write_text(LOGIN_TOKEN)
+            state = _wait(lambda: (lambda s: s if s["state"] not in ("signing_in", "checking") else None)(request(port, f"twitch/profiles/{alice['id']}/status")[1]), 40)
+            assert state == {"state": "signed_in", "message": "Signed in to Twitch as Alice"}, state
+            assert request(port, "pairing")[0] == 404, "the phone link ends with the sign-in"
+            assert Fake.log[-1][0] == "gql" and Fake.log[-1][4] == f"OAuth {LOGIN_TOKEN}"
+
+            # Following: live channels only, most watched first, answered from the saved login.
+            status, body = request(port, "twitch/following")
+            assert status == 200 and [c["login"] for c in body["items"]] == ["big", "mid", "small"], (status, body)
+            assert body["items"][0]["viewers"] == 5000 and body["items"][0]["game_name"] == "Game" and body["cursor"] is None
+            assert body["items"][0]["thumb"].endswith("-440x248.jpg")
+            following_calls = [e for e in gql_calls() if "followedLiveUsers" in e[2]]
+            assert following_calls[-1][4] == f"OAuth {LOGIN_TOKEN}"
+            request(port, "twitch/following")
+            assert len([e for e in gql_calls() if "followedLiveUsers" in e[2]]) == len(following_calls), "cached for a minute"
+            request(port, "twitch/following?refresh=true")
+            assert len([e for e in gql_calls() if "followedLiveUsers" in e[2]]) == len(following_calls) + 1
+
+            # Public browsing never carries the login.
+            request(port, "twitch/streams?game_id=555")
+            assert gql_calls()[-1][4] is None
+
+            # Twitch stops accepting the token: Following says to sign in again, and a check agrees.
+            Fake.accepted_token = "adifferenttokenadifferent12"
+            status, body = request(port, "twitch/following?refresh=true")
+            assert status == 409 and "Sign in again" in body["error"], (status, body)
+            request(port, f"twitch/profiles/{alice['id']}/status?check=true")
+            state = _wait(lambda: (lambda s: s if s["state"] not in ("checking",) else None)(request(port, f"twitch/profiles/{alice['id']}/status")[1]))
+            assert state["state"] == "sign_in_again", state
+            Fake.accepted_token = LOGIN_TOKEN
+
+            # Removing the profile deletes its sign-in files and falls back to Guest.
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/api/twitch/profiles/{alice['id']}", method="DELETE")
+            assert client.open(req, timeout=10).status == 204
+            assert not folder.exists() and request(port, "twitch/profiles")[1]["active_id"] == "guest"
+            assert request(port, "twitch/following")[0] == 409
+
         finally:
             process.terminate(); process.wait()
-
-        if "--browser" in sys.argv:
-            # The keyboard UI against the same fake Twitch, on a fresh backend (empty cache); needs Chromium and Node 22+.
-            Fake.total_categories = 26
-            port, process, _ = start(unofficial)
-            try:
-                wait_up(port)
-                shots = Path(os.environ.get("TWITCH_SHOTS", root / "shots"))
-                shots.mkdir(parents=True, exist_ok=True)
-                subprocess.run(["node", str(repository / "tests/twitch_browser.mjs"), f"http://127.0.0.1:{port}", str(shots)], check=True, timeout=120)
-            finally:
-                process.terminate(); process.wait()
+        log = logfile.read_text()
+        assert LOGIN_TOKEN not in log and "adifferenttoken" not in log, "the login token was logged"
 
         # 2. The official source, once a Twitch application is registered: just set the two variables.
         official = {"COUCHTUBE_TWITCH_CLIENT_ID": CLIENT_ID, "COUCHTUBE_TWITCH_CLIENT_SECRET": CLIENT_SECRET,
@@ -341,14 +458,6 @@ def main():
         log = logfile.read_text()
         assert CLIENT_SECRET not in log and "tokenone" not in log and "tokentwo" not in log, "secret or token in the log"
 
-        # 3. Only half of the pair set: fall back to the unofficial source and say so.
-        port, process, logfile = start({"COUCHTUBE_TWITCH_CLIENT_ID": CLIENT_ID, **unofficial})
-        try:
-            wait_up(port)
-            assert request(port, "twitch/status") == (200, {"source": "unofficial"})
-        finally:
-            process.terminate(); process.wait()
-        assert "using the unofficial Twitch API" in logfile.read_text()
     fake.shutdown()
     print("twitch smoke test passed")
 

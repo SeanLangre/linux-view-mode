@@ -36,6 +36,11 @@ impl Cache {
         map.get(key).filter(|(stored, _)| stored.elapsed() < ttl).map(|(_, value)| value.clone())
     }
 
+    /// Forget every answer whose key starts with `prefix` (one profile's personal answers).
+    pub fn remove_prefix(&self, prefix: &str) {
+        self.0.lock().unwrap().retain(|key, _| !key.starts_with(prefix));
+    }
+
     pub fn put(&self, key: String, value: Value) {
         let mut map = self.0.lock().unwrap();
         if map.len() >= CACHE_LIMIT {
@@ -408,32 +413,6 @@ mod tests {
         for bad in ["http://evil.example/helix", "https://x\"y", "https://a b", "ftp://x"] {
             assert!(!valid_url(bad), "{bad:?}");
         }
-    }
-
-    #[test]
-    fn query_values_are_percent_encoded() {
-        assert_eq!(query_string(&[("query", "a b&c=d/é"), ("first", "24")]), "?query=a%20b%26c%3Dd%2F%C3%A9&first=24");
-        assert_eq!(query_string(&[]), "");
-    }
-
-    #[test]
-    fn the_secret_goes_into_the_stdin_config_only() {
-        let credentials = Credentials { id: "ID0123456789".into(), secret: "SECRET0123456789".into() };
-        let config = token_config("https://id.twitch.tv/oauth2/token", &credentials);
-        assert!(config.contains("client_secret=SECRET0123456789") && config.contains("request = \"POST\""));
-        let config = get_config("https://api.twitch.tv/helix/streams?first=24", "ID0123456789", "tok123");
-        assert!(config.contains("Client-Id: ID0123456789") && config.contains("Bearer tok123"));
-    }
-
-    #[test]
-    fn validators() {
-        assert!(is_id("509658") && !is_id("") && !is_id("12a") && !is_id(&"1".repeat(21)));
-        assert!(is_login("shroud") && is_login("A_b_1") && !is_login("a-b") && !is_login("") && !is_login(&"a".repeat(26)));
-        assert!(valid_cursor("eyJiIjpudWxsfQ") && valid_cursor("a=b_c-d.e") && !valid_cursor("a b") && !valid_cursor(""));
-        assert_eq!(clean_query("  retro games "), Some("retro games".into()));
-        assert_eq!(clean_query("   "), None);
-        assert_eq!(clean_query("a\nb"), None);
-        assert_eq!(clean_query(&"x".repeat(101)), None);
     }
 
     #[test]

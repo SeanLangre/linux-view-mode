@@ -467,14 +467,27 @@ async fn exit_to_desktop(State(state): State<AppState>) -> Result<Json<serde_jso
     Ok(Json(json!({"status": "exiting"})))
 }
 
+#[derive(Deserialize)]
+struct PairingQuery {
+    /// `twitch` for a Twitch sign-in; anything else (or nothing) is Google's.
+    service: Option<String>,
+}
+
 /// Start the phone link before Firefox opens, so the QR code can be scanned first.
-async fn start_pairing(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn start_pairing(
+    State(state): State<AppState>,
+    Query(query): Query<PairingQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     state
         .profiles
         .pairing
         .attach(None)
         .await
         .map_err(internal)?;
+    // Say which site this is for before anyone scans, so the phone page words its steps for it.
+    if query.service.as_deref() == Some("twitch") {
+        state.profiles.pairing.set_flow(crate::pairing::Flow::Twitch).await;
+    }
     pairing(State(state)).await
 }
 

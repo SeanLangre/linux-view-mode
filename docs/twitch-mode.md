@@ -1,8 +1,8 @@
 # Twitch mode
 
-Status: **in progress** (written 2026-11-08). Build steps 1-3 are implemented: mode choice, Twitch profiles, browsing top streams, categories and search as a guest on Twitch's unofficial web API, and **watching a live channel** in the CouchTube window. Following, VODs, chat and the phone remote's Twitch screens are still planned. A second mode of CouchTube for Twitch, used the same way as the YouTube side: keyboard only, fullscreen, from the couch. Details of Twitch's APIs marked **verify** come from memory and have not been checked.
+Status: **in progress** (written 2026-11-08). Build steps 1-4 are implemented: mode choice, Twitch profiles, browsing top streams, categories and search on Twitch's unofficial web API, watching a live channel, and the Twitch sign-in with the **Following** list. **Step 4 has not been tried with a real Twitch login**; see its entry in the build order for what to check. VODs, chat and the phone remote's Twitch screens are still planned. A second mode of CouchTube for Twitch, used the same way as the YouTube side: keyboard only, fullscreen, from the couch.
 
-**Decisions (2026-11-08):** (1) ads are handled best-effort with uBlock Origin; (2) the **first screen** is a choice between **YouTube** and **Twitch**; (3) Twitch has its **own, separate profiles**, not shared with the YouTube ones. (4) **Data source (decided after step 2): use Twitch's unofficial web API for now, register a Twitch application later.** Nothing needs registering to browse; see [Data source](#data-source-unofficial-now-official-later) for what that costs and how to switch.
+**Decisions (2026-11-08):** (1) ads are handled best-effort with uBlock Origin; (2) the **first screen** is a choice between **YouTube** and **Twitch**; (3) Twitch has its **own, separate profiles**, not shared with the YouTube ones. (4) **Data source (decided after step 2): use Twitch's unofficial web API for now, register a Twitch application later.** Nothing needs registering to browse; see [Data source](#data-source-unofficial-now-official-later) for what that costs and how to switch. (5) **Following works like YouTube's sign-in**: a Firefox profile per Twitch profile and the login cookie, not a registered application.
 
 ## Goal
 
@@ -19,7 +19,7 @@ Same appliance feel as the YouTube mode: arrow keys, Enter, Esc to go back, `p` 
 | YouTube mode | Twitch mode |
 |---|---|
 | Feeds from yt-dlp with the profile's Firefox cookies | Feeds from **Twitch's web API** (unofficial, no registration), later the official Helix API with an OAuth token per profile |
-| Google sign-in in a Firefox window, phone keyboard | **Device-code login**: the TV shows a code, you enter it at `twitch.tv/activate` on your phone. No typing into Firefox, so no `xdotool` or phone-pairing page (**verify** that Twitch's device code flow works for a public client with `user:read:follows`) |
+| Google sign-in in a Firefox window, phone keyboard | **The same**: a Twitch sign-in in the Twitch profile's own Firefox folder, with the phone keyboard if wanted; the backend then reads Twitch's `auth-token` login cookie from the profile, like it reads YouTube's cookies. No token to register or store (step 4; **verify** that the web API accepts it, see Accounts) |
 | `watch.html` embeds YouTube's player and reports to `/api/player/report` | New `twitch.html` embeds `player.twitch.tv` and reports through the same endpoint |
 | mpv fallback (now [legacy](legacy-mpv.md)) | `streamlink` into mpv as an optional fallback (see Playback) |
 | Cards, rows, load-more, `nav.ts` focus model | Reused unchanged; a "card" is a live stream, category or VOD |
@@ -40,7 +40,7 @@ CouchTube opens on a new **mode choice**: two big buttons, **YouTube** and **Twi
 ## Accounts and sign-in
 
 - **No Twitch registration is needed for browsing** (the default, unofficial source). Registering a Twitch application is only needed for the **official** API: then set `COUCHTUBE_TWITCH_CLIENT_ID` and `COUCHTUBE_TWITCH_CLIENT_SECRET` (the secret is for the app token used when browsing as a guest; the device-code login in step 4 needs only the client id). The secret is never logged, never put in process arguments (it goes to `curl` on stdin) and must not be committed; with a systemd unit, put it in an `EnvironmentFile` with mode `0600`. See [Data source](#data-source-unofficial-now-official-later).
-- **Device code login**, per profile: TV shows `twitch.tv/activate` and a short code (also as a QR code for the phone); the backend polls until Twitch returns a token. Scope: `user:read:follows` (what the Following row needs).
+- **Following needs a login, and it works like the YouTube side (step 4, decided 2026-11-08).** "Add profile" opens a Firefox window on `twitch.tv/login` in that Twitch profile's own folder (`0700`, no extensions needed), reusing the sign-in machinery (the phone keyboard and the `xdotool` typing, the cookie watcher that closes the window). Twitch keeps the login in an `auth-token` cookie on `.twitch.tv`; the backend reads it from a copy of `cookies.sqlite` and sends it as `Authorization: OAuth <token>` with the website's client id to the web API (`src/gql.rs`), the way twitch.tv's own pages do. No application registration, no secret, no OAuth flow. **Not yet verified with a real login** (the code is written to make each of these a one-line change): the cookie name and header, that a followed-streams query works with it, and whether Twitch's integrity check blocks it (first pages worked without a login on 2026-11-08). The token is read per request and never logged or copied into the database; it ends with the sign-in files. The official device-code login (a user token for Helix) stays the fallback if the cookie route is blocked.
 - **Twitch profiles are separate from YouTube profiles.** Each Twitch profile is `{id, name, color}` plus its own token, in new tables (`twitch_profiles`, `twitch_tokens`) rather than a column on `profiles`, so the two lists never mix and removing one never touches the other. Someone can have a YouTube profile and a Twitch profile of the same name without any link between them. A Twitch profile needs no Firefox folder.
 - Tokens are stored in the SQLite database (`0600`), refreshed when they expire. Treat them like the Firefox cookies: local disk only, never logged, deleted when the Twitch profile is removed.
 - Each service has its own fixed **Guest** profile. A Twitch guest can use categories, search and watching, but not Following.
@@ -59,7 +59,7 @@ Browsing uses one of two sources, chosen at start-up (`Source` in `src/twitch.rs
 | Terms | A grey area (automated use of the website's own API); read-only, public data, low request volume | Allowed |
 | Paging | No cursors (see below); a bigger first page instead | Real cursors |
 | Limits | Categories 100, top streams 30, a category's streams about 100, search about 15 | Much higher |
-| Following | **Not available** (needs a logged-in user) | Yes, with the device-code login (step 4) |
+| Following | Yes, with the profile's Twitch login cookie (step 4; **not yet tried with a real login**) | Yes, with the device-code login (not built) |
 | Needs a secret | No | Yes for guest browsing (app token); the user login needs only the client id |
 
 ### How the unofficial source works (verified 2026-11-08)
@@ -73,7 +73,7 @@ Browsing uses one of two sources, chosen at start-up (`Source` in `src/twitch.rs
 1. Open the Twitch developer console (`dev.twitch.tv/console`), sign in, **Register Your Application**: any name, OAuth redirect URL `http://localhost`, category *Application Integration*, client type *Confidential* (for the secret). Note the **client id** and generate a **client secret**.
 2. Start CouchTube with `COUCHTUBE_TWITCH_CLIENT_ID` and `COUCHTUBE_TWITCH_CLIENT_SECRET` set. `GET /api/twitch/status` then answers `{"source":"official"}`, and the screens use Helix with real cursors. If only one of the two is set, or a value is malformed, the backend logs that and stays on the unofficial source.
 3. Keep the secret out of git and out of command lines: use a `0600` `EnvironmentFile` for the systemd unit.
-4. **Step 4 (the Following row) needs this registration**, because a user token comes from the device-code flow with your application's client id. Until then the Following item stays out of the Twitch Home menu.
+4. Step 4 (the Following row) does **not** need this registration: it uses the profile's Twitch login cookie on the unofficial source. Registering only adds a supported API and the device-code login as a fallback.
 5. What to check on the real API when switching (the Helix code has only been tested against a fake server): top games, streams with `game_id`, channel search, "Load more" with cursors, an expired token being renewed. These are in `TODO.md`.
 6. Once registered and verified, decide whether to keep the unofficial source as a fallback (it is automatic when the credentials are missing) or remove `src/gql.rs`.
 
@@ -90,7 +90,7 @@ Twitch Home menu: Following, Categories, Search, Queue (VODs only), Phone remote
 
 | Screen | Source |
 |---|---|
-| Following (live) | Helix *Get Followed Streams* (needs the token, so needs a registered application) |
+| Following (live) | A followed-streams query with the profile's login cookie (unofficial; step 4) / Helix *Get Followed Streams* (official, needs a user token) |
 | Categories | `games` (unofficial) / Helix *Get Top Games* |
 | Category | `game(id){streams}` (unofficial) / Helix *Get Streams* with `game_id` |
 | Search | `searchFor` (unofficial) / Helix *Search Channels* |
@@ -128,24 +128,29 @@ Results are cached per profile for a short time (live data about 1 minute, categ
 
 ## Security and limits
 
-- Tokens never leave `127.0.0.1` except in requests to Twitch; the device-code page is on `twitch.tv`, so nothing about it is exposed on the LAN (unlike the Google phone pairing).
-- No Twitch cookies and no Twitch password are ever typed or stored by CouchTube. Logging in with the device code gives only the scopes requested.
+- The Twitch login cookie stays on this machine in the profile's Firefox folder (`0700`) and is sent only to Twitch. Port 7879 (phone typing) is open only during a sign-in, as on the YouTube side, with the same encryption and confirmation code.
+- CouchTube never stores a Twitch password. Like the YouTube cookies, the login cookie gives access to the account: keep the profile folders private and the backend local-only, and read the account-flagging note in [`design.md`](design.md) (the same low request volume applies).
 - Twitch's terms allow embedding the official player; the streamlink fallback is a grey area, which is another reason to keep it optional.
 - Browsing uses an unofficial API (see [Data source](#data-source-unofficial-now-official-later)); it can break without notice, and the official source is the planned fix. Registering your own Twitch application takes a few minutes, once.
 
 ## Build order
 
 1. [x] Mode choice screen (YouTube / Twitch), per-mode active profile, Twitch profiles and Guest. Implemented 2026-11-08: `GET/PUT /api/mode`, `GET/POST /api/twitch/profiles`, `DELETE /api/twitch/profiles/<id>`, `POST /api/twitch/profiles/<id>/select` in `src/twitch.rs`; `ModeGate.tsx` and `TwitchGate.tsx` in the frontend; a **Switch service** item in the YouTube Home menu. The Twitch side stops at a placeholder page after choosing a profile. Unit-tested and the endpoints were tried with curl; not yet seen on screen (see `TODO.md`). The kiosk's start URL did not need to change: `/` now simply opens the mode choice.
-2. [x] Browsing as a guest. Implemented 2026-11-08: both sources (`src/gql.rs` unofficial, the default; `src/helix.rs` official), the `twitch/status|categories|streams|search` routes, and `TwitchHome.tsx` (Home with Top live streams, Categories, Search; a category's streams; Load more; `u` refresh, `/` search, Esc back with the focus restored). Enter on a stream says watching arrives in the next step. Tested with fake Twitch servers (`tests/twitch_smoke.py`, `--browser` for the keyboard flow) **and checked by hand against the real Twitch**: real categories, top streams, a category's streams and search all returned data, and the screens rendered with real thumbnails and box art.
-3. [x] The player page for live streams. Implemented 2026-11-08: `frontend/public/twitch.html`, `POST /api/twitch/play`, `Player::play_twitch`, and the player frame, Esc-to-stop, focus return and error messages in `TwitchHome.tsx`. Checked: unit tests; `tests/twitch_smoke.py` (play, reports, offline, quit, stop) and `--browser` (Enter starts the page, Esc stops it and returns the focus, a page that cannot load Twitch fails with a message that any key dismisses); and **by hand against the real Twitch in Firefox 159**: the embed accepted `parent=127.0.0.1` and played. Headless Chromium cannot play it (no `PLAYING` event), so use Firefox for playback checks. **Not yet checked: ads with uBlock Origin, and the real TV.**
-4. [ ] Device-code login per Twitch profile, token storage and refresh, the **Following** row.
+2. [x] Browsing as a guest. Implemented 2026-11-08: both sources (`src/gql.rs` unofficial, the default; `src/helix.rs` official), the `twitch/status|categories|streams|search` routes, and `TwitchHome.tsx` (Home with Top live streams, Categories, Search; a category's streams; Load more; `u` refresh, `/` search, Esc back with the focus restored). Enter on a stream says watching arrives in the next step. Tested with fake Twitch servers (`tests/twitch_smoke.py`) **and checked by hand against the real Twitch**: real categories, top streams, a category's streams and search all returned data, and the screens rendered with real thumbnails and box art.
+3. [x] The player page for live streams. Implemented 2026-11-08: `frontend/public/twitch.html`, `POST /api/twitch/play`, `Player::play_twitch`, and the player frame, Esc-to-stop, focus return and error messages in `TwitchHome.tsx`. Checked: a unit test; `tests/twitch_smoke.py` (play, reports, offline, quit, stop); and **by hand against the real Twitch in Firefox 159**: the embed accepted `parent=127.0.0.1` and played. Headless Chromium cannot play it (no `PLAYING` event), so use Firefox for playback checks. **Not yet checked: ads with uBlock Origin, and the real TV.**
+4. [x] Twitch sign-in and Following. Implemented 2026-11-08, **not tried with a real login**:
+   - **Sign-in** (`src/twitch_login.rs`, a child of `profiles.rs`): each Twitch profile gets a Firefox folder at `<data>/twitch/<id>/firefox` (`0700`, apart from YouTube's). `POST /api/twitch/profiles/<id>/signin` opens Firefox on `https://www.twitch.tv/login` (X11 mode, for the phone typing); the backend polls a copy of `cookies.sqlite` every 2 s and, once Twitch's `auth-token` cookie has been there three times in a row, closes the window and asks Twitch who it is (`currentUser`). `GET …/status?check=true` re-checks. States are YouTube's (`signing_in`, `checking`, `signed_in`, `sign_in_again`, `check_failed`).
+   - **Phone keyboard:** the same QR code, confirmation code and encryption as for Google, started with `POST /api/pairing?service=twitch`. The sealed `hello` reply tells the page the site is Twitch, so it words its steps for Twitch. Twitch's login form has the username and the password on one page, so the phone's first step presses **Tab** instead of Enter (`Flow` in `src/pairing.rs`); the password step submits.
+   - **Following:** `GET /api/twitch/following` reads the token fresh from the profile's cookies (never stored or logged), and sends `currentUser { followedLiveUsers(first: 100) { … stream { … } } }` to the web API with `Authorization: OAuth <token>`; live channels only, most watched first, cached 60 s per profile. A rejected token (HTTP 401, or `currentUser` null) is a `409` that says to sign in again. The Twitch Home menu shows **Following** first for a signed-in (non-Guest) profile; the profile list has **S** to sign in and the sign-in screen is `TwitchSignIn.tsx`.
+   - **Checked without a login (2026-11-08):** the query shapes validate against Twitch's schema (`currentUser { login displayName }` and `followedLiveUsers(first)`); a bogus token gets `401 The "Authorization" token is invalid`, so the `OAuth` header is understood. Tested against fakes in `tests/twitch_smoke.py` (sign-in with a fake Firefox that writes a cookie database, Following, a rejected token, removal, and no token in the log).
+   - **To check with a real login, and where to change it if it fails:** (1) the cookie is `auth-token` on `.twitch.tv` (`COOKIE_NAME`, `COOKIE_HOST` in `src/twitch_login.rs`); (2) Twitch's login page takes Tab then Enter from the phone, and opens with the username field focused (`Flow::submit_key` in `src/pairing.rs`; `LOGIN_URL`); (3) the web API accepts the cookie's value as the OAuth token and does not fail its integrity check for it (`CURRENT_USER` and `FOLLOWING` in `src/gql.rs`; if it does, the fallback is the official device-code login); (4) Twitch's two-step verification page takes the phone's third step.
 5. [ ] Channel screen with VODs and clips, VOD resume in `progress`, queue for VODs.
 6. [ ] Chat pane (`t`), phone remote support for the Twitch player.
 7. [ ] Optional: streamlink fallback, if the embed's ads turn out to be unbearable.
 
 ## Open questions
 
-- **When to register a Twitch application:** needed for Following (step 4) and for a supported API. Until then the unofficial source carries browsing; see [Registering later](#registering-later-switching-to-the-official-api).
+- **When to register a Twitch application:** no longer needed for Following (step 4 uses the login cookie). It stays useful for a supported API and as the fallback if Twitch blocks cookie use; see [Registering later](#registering-later-switching-to-the-official-api).
 - **Ads in the embed:** the embed itself is verified; how well uBlock Origin handles Twitch's ads is only known on the real TV with a non-subscribed account. Step 7 exists only if it is not good enough.
 - **`parent` on a bare IP:** answered 2026-11-08, Twitch accepts `127.0.0.1` and `localhost`; nothing to do.
 - **Auto-start in the last mode:** the mode choice always shows first for now. A setting to skip it could come later.

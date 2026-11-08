@@ -13,7 +13,7 @@ use serde_json::json;
 use crate::{
     api::{ApiError, AppState, internal},
     db::TwitchProfile,
-    gql::Gql,
+    gql::{self, Gql},
     helix::{self, Category, Channel, Helix, Page, Stream},
     profiles,
 };
@@ -23,40 +23,48 @@ use crate::{
 /// the **official** Helix API. The routes and the frontend are the same for both.
 #[derive(Clone)]
 pub enum Source {
-    Official(Helix),
+    /// Browsing through Helix; the web API client is still kept for Following (the profile's login cookie).
+    Official(Helix, Gql),
     Unofficial(Gql),
 }
 
 impl Source {
     pub fn from_env() -> Self {
         let official = Helix::from_env();
-        if official.configured() { Self::Official(official) } else { Self::Unofficial(Gql::from_env()) }
+        if official.configured() { Self::Official(official, Gql::from_env()) } else { Self::Unofficial(Gql::from_env()) }
+    }
+
+    /// The web API client: Following and the sign-in check always use it, whichever source browses.
+    pub fn web(&self) -> &Gql {
+        match self {
+            Self::Official(_, web) | Self::Unofficial(web) => web,
+        }
     }
 
     fn name(&self) -> &'static str {
         match self {
-            Self::Official(_) => "official",
+            Self::Official(..) => "official",
             Self::Unofficial(_) => "unofficial",
         }
     }
 
     pub async fn top_categories(&self, cursor: Option<&str>, refresh: bool) -> anyhow::Result<Page<Category>> {
         match self {
-            Self::Official(helix) => helix.top_categories(cursor, refresh).await,
+            Self::Official(helix, _) => helix.top_categories(cursor, refresh).await,
             Self::Unofficial(gql) => gql.top_categories(cursor, refresh).await,
         }
     }
 
     pub async fn streams(&self, game_id: Option<&str>, cursor: Option<&str>, refresh: bool) -> anyhow::Result<Page<Stream>> {
         match self {
-            Self::Official(helix) => helix.streams(game_id, cursor, refresh).await,
+            Self::Official(helix, _) => helix.streams(game_id, cursor, refresh).await,
             Self::Unofficial(gql) => gql.streams(game_id, cursor, refresh).await,
         }
     }
 
     pub async fn search_channels(&self, text: &str, cursor: Option<&str>, refresh: bool) -> anyhow::Result<Page<Channel>> {
         match self {
-            Self::Official(helix) => helix.search_channels(text, cursor, refresh).await,
+            Self::Official(helix, _) => helix.search_channels(text, cursor, refresh).await,
             // The unofficial search has no paging.
             Self::Unofficial(gql) => gql.search_channels(text, refresh).await,
         }
@@ -71,6 +79,9 @@ pub fn routes() -> Router<AppState> {
         .route("/twitch/profiles", get(list_profiles).post(create_profile))
         .route("/twitch/profiles/{id}", axum::routing::delete(remove_profile))
         .route("/twitch/profiles/{id}/select", post(select_profile))
+        .route("/twitch/profiles/{id}/signin", post(signin))
+        .route("/twitch/profiles/{id}/status", get(login_status))
+        .route("/twitch/following", get(following))
         .route("/twitch/status", get(status))
         .route("/twitch/play", post(play))
         .route("/twitch/categories", get(categories))
@@ -222,7 +233,7 @@ async fn create_profile(
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "color must be a six-digit hex color"));
     }
     let _transition = state.transition.lock().await;
-    let profile = state.profiles.db.twitch_create(request.name.trim(), color).await.map_err(internal)?;
+    let profile = state.profiles.twitch_create(request.name.trim(), color).await.map_err(internal)?;
     Ok((StatusCode::CREATED, Json(profile)))
 }
 
@@ -232,6 +243,9 @@ async fn select_profile(
 ) -> Result<Json<TwitchProfile>, ApiError> {
     let _transition = state.transition.lock().await;
     let profile = require_profile(&state, &id).await?;
+    if state.profiles.twitch_login_status(&id).await.busy() {
+        return Err(ApiError::new(StatusCode::CONFLICT, "close the sign-in window and wait for the login check first"));
+    }
     state.playback.stop().await.map_err(internal)?;
     state.profiles.db.twitch_select(&id).await.map_err(internal)?;
     Ok(Json(profile))
@@ -246,9 +260,85 @@ async fn remove_profile(
     }
     let _transition = state.transition.lock().await;
     require_profile(&state, &id).await?;
+    if state.profiles.twitch_login_status(&id).await.busy() {
+        return Err(ApiError::new(StatusCode::CONFLICT, "close the sign-in window and wait for the login check first"));
+    }
     state.playback.stop().await.map_err(internal)?;
-    state.profiles.db.twitch_remove(&id).await.map_err(internal)?;
+    state.profiles.twitch_remove(&id, state.twitch.web()).await.map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Opens Firefox on Twitch's login page for this profile. The phone keyboard works as on YouTube.
+async fn signin(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::profiles::LoginStatus>, ApiError> {
+    let _transition = state.transition.lock().await;
+    let profile = require_profile(&state, &id).await?;
+    if id == "guest" {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "Guest stays signed out"));
+    }
+    if state.profiles.twitch_login_status(&id).await.busy() {
+        return Err(ApiError::new(StatusCode::CONFLICT, "sign-in is already open or being checked"));
+    }
+    state.playback.stop().await.map_err(internal)?;
+    state.twitch.web().forget(&id);
+    state.profiles.twitch_signin(profile, state.twitch.web().clone()).await.map_err(|err| {
+        tracing::error!("could not open the Twitch sign-in: {err:#}");
+        ApiError::new(StatusCode::BAD_GATEWAY, "could not open Firefox, is it installed?")
+    })?;
+    Ok(Json(state.profiles.twitch_login_status(&id).await))
+}
+
+#[derive(Deserialize)]
+struct LoginQuery {
+    #[serde(default)]
+    check: bool,
+}
+
+/// The sign-in state; `?check=true` asks Twitch who the saved login belongs to.
+async fn login_status(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<LoginQuery>,
+) -> Result<Json<crate::profiles::LoginStatus>, ApiError> {
+    let _transition = state.transition.lock().await;
+    require_profile(&state, &id).await?;
+    let status = state.profiles.twitch_login_status(&id).await;
+    if query.check && id != "guest" && !status.busy() {
+        state.profiles.twitch_start_check(&id, state.twitch.web().clone()).await;
+    }
+    Ok(Json(state.profiles.twitch_login_status(&id).await))
+}
+
+/// The channels the active profile follows that are live now. Needs a signed-in profile.
+async fn following(
+    State(state): State<AppState>,
+    params: Result<Query<Browse>, QueryRejection>,
+) -> Result<Json<Page<Stream>>, ApiError> {
+    let Query(params) = params.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid query"))?;
+    let profile = {
+        let _transition = state.transition.lock().await;
+        state.profiles.db.twitch_active().await.map_err(internal)?
+    };
+    let Some(token) = state.profiles.twitch_token(&profile.id).await else {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            if profile.id == "guest" {
+                "Sign in to Twitch with a profile (not Guest) to see who you follow"
+            } else {
+                "This profile is not signed in to Twitch yet: press S on it in the profile list"
+            },
+        ));
+    };
+    match state.twitch.web().followed_streams(&profile.id, &token, params.refresh).await {
+        Ok(items) => Ok(Json(Page { items, cursor: None })),
+        Err(err) if err.downcast_ref::<gql::SignedOut>().is_some() => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "Twitch did not accept the saved sign-in. Sign in again from the profile screen",
+        )),
+        Err(err) => Err(upstream("following")(err)),
+    }
 }
 
 async fn require_profile(state: &AppState, id: &str) -> Result<TwitchProfile, ApiError> {
@@ -297,14 +387,4 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
-    #[tokio::test]
-    async fn mode_is_empty_until_chosen_then_remembered() {
-        let (db, path) = temp_db("mode");
-        assert_eq!(db.mode().await.unwrap(), None);
-        db.set_mode("twitch").await.unwrap();
-        db.set_mode("youtube").await.unwrap();
-        assert_eq!(db.mode().await.unwrap().as_deref(), Some("youtube"));
-        drop(db);
-        std::fs::remove_file(path).unwrap();
-    }
 }

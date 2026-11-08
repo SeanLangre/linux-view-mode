@@ -3,6 +3,7 @@ import * as api from './api'
 
 type Screen =
   | { kind: 'home' }
+  | { kind: 'following' }
   | { kind: 'live' }
   | { kind: 'categories' }
   | { kind: 'category'; id: string; name: string }
@@ -14,6 +15,7 @@ type Card = { key: string; art: string; portrait: boolean; title: string; meta: 
 
 /** Cards per row: category art is portrait, so more of it fits. */
 const columnsFor = (screen: Screen) => (screen.kind === 'categories' ? 6 : 4)
+const FOLLOWING_ITEM = { label: 'Following', note: 'Live channels you follow', screen: { kind: 'following' } as Screen }
 const HOME_MENU = [
   { label: 'Top live streams', note: 'The most watched right now', screen: { kind: 'live' } as Screen },
   { label: 'Categories', note: 'Browse by game or topic', screen: { kind: 'categories' } as Screen },
@@ -40,6 +42,10 @@ async function fetchPage(screen: Screen, query: string, cursor: string | undefin
   switch (screen.kind) {
     case 'categories': { const p = await api.twitchCategories(cursor, refresh); return { cards: p.items.map(categoryCard), cursor: p.cursor } }
     case 'category': { const p = await api.twitchStreams(screen.id, cursor, refresh); return { cards: p.items.map(streamCard), cursor: p.cursor } }
+    case 'following': {
+      const p = await api.twitchFollowing(refresh)
+      return { cards: p.items.map(streamCard), cursor: p.cursor }
+    }
     case 'live': { const p = await api.twitchStreams(undefined, cursor, refresh); return { cards: p.items.map(streamCard), cursor: p.cursor } }
     case 'search': {
       if (!query) return { cards: [], cursor: null }
@@ -53,7 +59,7 @@ async function fetchPage(screen: Screen, query: string, cursor: string | undefin
 const screenKey = (screen: Screen, query: string) =>
   screen.kind === 'category' ? `category:${screen.id}` : screen.kind === 'search' ? `search:${query}` : screen.kind
 const titleOf = (screen: Screen) =>
-  ({ home: 'Twitch', live: 'Top live streams', categories: 'Categories', search: 'Search Twitch' }[screen.kind as string]
+  ({ home: 'Twitch', following: 'Following', live: 'Top live streams', categories: 'Categories', search: 'Search Twitch' }[screen.kind as string]
     ?? (screen.kind === 'category' ? screen.name : ''))
 
 /** The Twitch screens after a profile is chosen: Home, Top live, Categories, a category, Search. */
@@ -265,7 +271,7 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
         <div className="profile-label" style={{ borderColor: profile.color }}>{profile.name}</div></header>
       <h1 className="page-title">{titleOf(screen)}</h1>
       {screen.kind === 'home' && <div className="profile-grid">
-        {HOME_MENU.map((item) => <button type="button" data-nav key={item.label} className="profile-card" onClick={() => push(item.screen)}>
+        {(profile.id === 'guest' ? HOME_MENU : [FOLLOWING_ITEM, ...HOME_MENU]).map((item) => <button type="button" data-nav key={item.label} className="profile-card" onClick={() => push(item.screen)}>
           <strong>{item.label}</strong><span className="profile-note">{item.note}</span></button>)}
         <button type="button" data-nav className="profile-card" onClick={onService}>
           <strong>Switch service</strong><span className="profile-note">Back to YouTube or Twitch</span></button>
@@ -282,7 +288,7 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
         {error && <p className="status error" role="alert">{error} <button data-nav onClick={() => setRevision((r) => r + 1)}>Retry</button></p>}
         {loading && cards.length === 0 && <p className="status">Loading…</p>}
         {!loading && !error && cards.length === 0 && (screen.kind !== 'search' || query) &&
-          <p className="status">{screen.kind === 'search' ? 'No channels found.' : 'Nothing here right now.'}</p>}
+          <p className="status">{screen.kind === 'search' ? 'No channels found.' : screen.kind === 'following' ? 'None of the channels you follow are live right now.' : 'Nothing here right now.'}</p>}
         <div className={`tw-grid ${screen.kind === 'categories' ? 'tw-six' : ''}`}>
           {cards.map((card) => <button type="button" data-nav key={card.key} className="card tw-card" onClick={() => open(card.target)}>
             <div className={`thumb ${card.portrait ? 'tw-portrait' : ''}`}>

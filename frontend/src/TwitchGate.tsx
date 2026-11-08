@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import * as api from './api'
 import TwitchHome from './TwitchHome'
+import TwitchSignIn from './TwitchSignIn'
 
-type View = { kind: 'list' } | { kind: 'add' } | { kind: 'remove'; profile: api.TwitchProfile }
+type View = { kind: 'list' } | { kind: 'add' } | { kind: 'manage' | 'remove'; profile: api.TwitchProfile }
 const COLORS = ['#9146ff', '#6288d9', '#c7799e', '#53a888', '#cb9a53', '#dc7474']
 const COLOR_NAMES = ['Purple', 'Blue', 'Pink', 'Green', 'Gold', 'Red']
 
@@ -74,16 +75,19 @@ export default function TwitchGate({ onService }: { onService: () => void }) {
       if (offset !== undefined) {
         event.preventDefault()
         buttons[Math.max(0, Math.min(buttons.length - 1, index + offset))]?.focus()
-      } else if (view.kind === 'list' && event.key === 'd') {
+      } else if (view.kind === 'list') {
         const profile = profiles[highlighted]
-        if (profile && profile.id !== 'guest') { event.preventDefault(); setView({ kind: 'remove', profile }) }
+        if (profile && profile.id !== 'guest') {
+          if (event.key === 'd') { event.preventDefault(); setView({ kind: 'remove', profile }) }
+          if (event.key === 's') { event.preventDefault(); setView({ kind: 'manage', profile }) }
+        }
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   })
 
-  if (active) return <TwitchHome key={active.id} profile={active} onProfile={() => setActive(null)} onService={onService} />
+  if (active) return <TwitchHome key={active.id} profile={active} onProfile={() => { setActive(null); setView({ kind: 'list' }); void refresh().catch(() => {}) }} onService={onService} />
 
   return (
     <main className="app profiles-page" ref={panel}>
@@ -104,17 +108,17 @@ export default function TwitchGate({ onService }: { onService: () => void }) {
         </div>}
         {!loading && profiles.length === 0 && <button data-nav onClick={() => void perform(refresh)}>Retry</button>}
         <footer className="hints"><span><kbd>← ↑ ↓ →</kbd>Move</span><span><kbd>Enter</kbd>Choose</span>
-          <span><kbd>D</kbd>Remove profile</span><span><kbd>Esc</kbd>Change service</span></footer>
+          <span><kbd>S</kbd>Sign in to Twitch</span><span><kbd>D</kbd>Remove profile</span><span><kbd>Esc</kbd>Change service</span></footer>
       </>}
       {view.kind === 'add' && <>
         <h1 className="page-title">Add a Twitch profile</h1>
-        <p className="status">Twitch profiles are separate from YouTube profiles. Signing in to Twitch comes in a later step.</p>
+        <p className="status">Twitch profiles are separate from YouTube profiles. After this you can sign in to Twitch (optional), so Following shows the channels you follow.</p>
         <form className="profile-form" onSubmit={(event) => {
           event.preventDefault()
           void perform(async () => {
-            await api.createTwitchProfile(name, color)
+            const profile = await api.createTwitchProfile(name, color)
             await refresh()
-            setView({ kind: 'list' })
+            setView({ kind: 'manage', profile })
           })
         }}>
           <label>Name<input className="search-box" value={name} maxLength={40} required disabled={busy}
@@ -122,13 +126,16 @@ export default function TwitchGate({ onService }: { onService: () => void }) {
           <label>Colour<select value={color} disabled={busy} onChange={(event) => setColor(event.target.value)}>
             {COLORS.map((value, index) => <option value={value} key={value}>{COLOR_NAMES[index]}</option>)}
           </select></label>
-          <button type="submit" disabled={busy || !name.trim()}>Create profile</button>
+          <button type="submit" disabled={busy || !name.trim()}>Create and sign in</button>
           <button type="button" disabled={busy} onClick={() => setView({ kind: 'list' })}>Cancel</button>
         </form>
       </>}
+      {view.kind === 'manage' && <TwitchSignIn profile={view.profile}
+        onContinue={() => void choose(view.profile)}
+        onBack={() => { void refresh().catch(() => {}); setView({ kind: 'list' }) }} />}
       {view.kind === 'remove' && <>
         <h1 className="page-title">Remove {view.profile.name}?</h1>
-        <p className="status">This deletes this Twitch profile. Your YouTube profiles are not affected.</p>
+        <p className="status">This deletes this Twitch profile and its saved Twitch sign-in on this machine. Your YouTube profiles are not affected.</p>
         <div className="profile-actions">
           <button data-nav disabled={busy} onClick={() => setView({ kind: 'list' })}>Keep profile</button>
           <button data-nav disabled={busy} onClick={() => void perform(async () => {

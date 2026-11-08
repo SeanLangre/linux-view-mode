@@ -70,6 +70,7 @@ src/
   twitch.rs       Twitch mode routes: saved mode, Twitch profiles, browsing (see [`twitch-mode.md`](twitch-mode.md))
   gql.rs          Twitch's unofficial web API client (the default source, no registration)
   helix.rs        official Twitch Helix client (used once a Twitch application is registered)
+  twitch_login.rs Twitch sign-in (Firefox folder, login cookie, check); a child module of profiles.rs
   vendor/         nacl.min.js (tweetnacl, inlined into the phone page)
   db.rs           SQLite profiles, progress, metadata, queue and per-profile cache
 frontend/         Vite + React + TS
@@ -79,6 +80,7 @@ frontend/         Vite + React + TS
   src/ModeGate.tsx     first screen: YouTube or Twitch
   src/ProfileGate.tsx  YouTube Who's watching, sign-in and phone pairing screens
   src/TwitchGate.tsx   Twitch Who's watching screen
+  src/TwitchSignIn.tsx Twitch sign-in panel (QR code, phone code, Firefox)
   src/TwitchHome.tsx   Twitch Home, top live, categories, category and search screens
   src/format.ts, recent.ts  time formatting, recent searches
   src/styles.css  10-foot styling (1rem = 1/80 of screen width)
@@ -88,7 +90,7 @@ config/
 frontend/public/watch.html  embedded player page shown in the kiosk window
 deploy/           install.sh, couchtube.service, couchtube-kiosk.{service,desktop}, couchtube-refresh{,.service,.timer}
 packaging/        AppImage build
-tests/            smoke tests (playback, feeds, profiles, Twitch), fake mpv, SponsorBlock Lua test
+tests/            smoke tests (profiles, feeds, Twitch) with fake tools, SponsorBlock Lua test
 ```
 
 ### Crates

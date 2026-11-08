@@ -15,7 +15,7 @@
 </style>
 <h1>Sign in on the TV</h1>
 <section id="confirm">
-  <p>Check that the TV shows this code, then press <b>Yes</b> on the TV. <b>Confirm the code on the TV before you continue to Google.</b></p>
+  <p>Check that the TV shows this code, then press <b>Yes</b> on the TV. <b>Confirm the code on the TV before you continue to <span data-twitch="Twitch">Google</span>.</b></p>
   <div id="code" aria-live="polite">…</div>
 </section>
 <p>Do each step when the TV shows the matching page. If you mistype, you can send a step up to 3 times; after that use the TV keyboard.</p>
@@ -24,18 +24,18 @@
 
 <form id="email-form" class="step" data-step="email">
   <fieldset>
-    <legend>1. Email</legend>
-    <p>The TV must be showing Google's email field.</p>
-    <label for="email">Email</label>
+    <legend data-twitch="1. Username">1. Email</legend>
+    <p data-twitch="The TV must be showing Twitch's login form. After this step the TV moves on to the password field.">The TV must be showing Google's email field.</p>
+    <label for="email" data-twitch="Username or email">Email</label>
     <input id="email" name="username" type="email" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" required>
-    <button type="submit">Type email on the TV</button>
+    <button type="submit" data-twitch="Type username on the TV">Type email on the TV</button>
   </fieldset>
 </form>
 
 <form id="password-form" class="step" data-step="password">
   <fieldset>
     <legend>2. Password</legend>
-    <p>Wait until the TV shows the password page.</p>
+    <p data-twitch="Send this after step 1. It also presses Log in.">Wait until the TV shows the password page.</p>
     <label for="pass">Password</label>
     <input id="pass" name="password" type="password" autocomplete="current-password" required>
     <button type="submit">Password page is showing, type it</button>
@@ -44,7 +44,7 @@
 
 <form id="code-form" class="step" data-step="code">
   <fieldset>
-    <legend>3. 2-step code (only if asked)</legend>
+    <legend data-twitch="3. Verification code (only if Twitch asks)">3. 2-step code (only if asked)</legend>
     <label for="code">Verification code</label>
     <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" required>
     <button type="submit">Type code on the TV</button>
@@ -58,6 +58,16 @@
   const unhex = (text) => Uint8Array.from(text.match(/../g) ?? [], (h) => parseInt(h, 16))
   const store = (name, value) => { try { if (value === undefined) return sessionStorage.getItem(name); sessionStorage.setItem(name, value) } catch { return null } }
   const forms = Array.from(document.querySelectorAll('.step'))
+  let site = 'Google'
+  // The TV says which site the sign-in is for (inside the sealed hello reply); reword the steps for Twitch.
+  function applyService(service) {
+    if (service !== 'twitch') return
+    site = 'Twitch'
+    for (const el of document.querySelectorAll('[data-twitch]')) el.textContent = el.dataset.twitch
+    const username = document.getElementById('email')
+    username.type = 'text'
+    username.autocomplete = 'username'
+  }
   const lock = (locked) => { for (const form of forms) form.querySelector('fieldset').disabled = locked }
   lock(true)
 
@@ -94,7 +104,9 @@
         const reply = await res.json()
         const plain = nacl.secretbox.open(unhex(reply.c), unhex(reply.n), key)
         if (!plain) { say('This link is out of date: scan the QR code again.', false); return }
-        const code = JSON.parse(dec.decode(plain)).code
+        const hello = JSON.parse(dec.decode(plain))
+        const code = hello.code
+        applyService(hello.service)
         codeBox.textContent = code.slice(0, 3) + ' ' + code.slice(3)
         codeBox.setAttribute('aria-label', code.split('').join(' '))
         poll()
@@ -109,7 +121,7 @@
         const res = await fetch(location.pathname + '/status?phone=' + phone)
         if (!res.ok) { say(await errorOf(res), false); return }
         const { state } = await res.json()
-        if (state === 'confirmed' && !confirmed) { confirmed = true; lock(false); say('Confirmed. Continue to Google on the TV.', true) }
+        if (state === 'confirmed' && !confirmed) { confirmed = true; lock(false); say('Confirmed. Continue to ' + site + ' on the TV.', true) }
         if (state === 'none') { lock(true); say('Another phone took over this link. Scan the QR code again.', false); return }
       } catch { /* keep polling */ }
       setTimeout(poll, 1000)

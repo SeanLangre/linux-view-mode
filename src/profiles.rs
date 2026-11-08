@@ -86,13 +86,11 @@ impl Runtime {
     }
 }
 
-/// True once the sign-in window has stored YouTube's login cookie. Firefox keeps the cookie
-/// database open, so read a copy of it and its write-ahead log instead of the live files.
-fn logged_in(folder: &Path) -> bool {
-    let Ok(copy) = tempfile_dir() else {
-        return false;
-    };
-    let check = || -> Result<bool> {
+/// Runs `read` on a copy of a profile's cookie database. Firefox keeps the database open, so the
+/// copy (with its write-ahead log) is read instead of the live files. `None` if anything fails.
+fn with_cookies<T>(folder: &Path, read: impl FnOnce(&rusqlite::Connection) -> Result<T>) -> Option<T> {
+    let copy = tempfile_dir().ok()?;
+    let run = || -> Result<T> {
         for name in ["cookies.sqlite", "cookies.sqlite-wal"] {
             let source = folder.join(name);
             if source.exists() {
@@ -103,20 +101,35 @@ fn logged_in(folder: &Path) -> bool {
             copy.join("cookies.sqlite"),
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
+        read(&db)
+    };
+    let result = run().ok();
+    let _ = std::fs::remove_dir_all(&copy);
+    result
+}
+
+/// True once the sign-in window has stored YouTube's login cookie.
+fn logged_in(folder: &Path) -> bool {
+    with_cookies(folder, |db| {
         let found = db.query_row(
             "SELECT COUNT(*) FROM moz_cookies WHERE name = 'LOGIN_INFO' AND host LIKE '%youtube.com'",
             [],
             |row| row.get::<_, i64>(0),
         )?;
         Ok(found > 0)
-    };
-    let found = check().unwrap_or(false);
-    let _ = std::fs::remove_dir_all(&copy);
-    found
+    })
+    .unwrap_or(false)
 }
 
+/// A fresh private directory for one read. Each call gets its own, because the sign-in watchers and
+/// token reads of different profiles can run at the same time.
 fn tempfile_dir() -> Result<PathBuf> {
-    let path = std::env::temp_dir().join(format!("couchtube-cookies-{}", std::process::id()));
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "couchtube-cookies-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
     private_directory(&path)?;
     Ok(path)
 }
@@ -146,6 +159,10 @@ pub fn private_directory(path: &Path) -> Result<()> {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
+
+/// Twitch: the sign-in window, the login cookie and the check. See `twitch_login.rs`.
+#[path = "twitch_login.rs"]
+mod twitch_login;
 
 impl Profiles {
     pub fn open(root: PathBuf, pairing: Pairing) -> Result<Self> {

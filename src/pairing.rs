@@ -56,8 +56,37 @@ impl Step {
     }
 }
 
+/// Which site the sign-in window is on. It decides how the first field is submitted and what the
+/// phone page says.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Flow {
+    /// Google: the email page and the password page are separate, so each step ends with Enter.
+    Google,
+    /// Twitch: the username and the password are fields of one form, so the first step ends with
+    /// Tab (to the password field) and only the password step submits.
+    Twitch,
+}
+
+impl Flow {
+    fn name(self) -> &'static str {
+        match self {
+            Flow::Google => "google",
+            Flow::Twitch => "twitch",
+        }
+    }
+
+    /// The key pressed after typing this step.
+    fn submit_key(self, step: Step) -> &'static str {
+        match (self, step) {
+            (Flow::Twitch, Step::Email) => "Tab",
+            _ => "Return",
+        }
+    }
+}
+
 struct Session {
     token: String,
+    flow: Flow,
     key: [u8; 32],
     phone: Option<Phone>,
     pid: Option<u32>,
@@ -118,6 +147,7 @@ impl Pairing {
         });
         *session = Some(Session {
             token,
+            flow: Flow::Google,
             key,
             phone: None,
             pid,
@@ -130,6 +160,19 @@ impl Pairing {
             self.expire_later().await;
         }
         Ok(())
+    }
+
+    /// Say which site the (current) sign-in is for. Google is the default.
+    pub async fn set_flow(&self, flow: Flow) {
+        if let Some(session) = self.session.lock().await.as_mut() {
+            session.flow = flow;
+        }
+    }
+
+    /// The key to press after typing `step` for this session's site.
+    async fn submit_key(&self, token: &str, step: Step) -> &'static str {
+        let guard = self.session.lock().await;
+        guard.as_ref().filter(|s| s.token == token).map_or("Return", |s| s.flow.submit_key(step))
     }
 
     /// End a session that is still waiting for its window if that never opens. It acts only on
@@ -300,7 +343,9 @@ impl Pairing {
                 code
             }
         };
-        Json(seal(&session.key, random[4..].try_into().unwrap(), &json!({"code": code}))).into_response()
+        // The site travels inside the sealed reply, so the page can word its steps for it.
+        let reply = json!({"code": code, "service": session.flow.name()});
+        Json(seal(&session.key, random[4..].try_into().unwrap(), &reply)).into_response()
     }
 
     /// Mark a step as used; says why not if the token is wrong or the step was already used.
@@ -443,7 +488,7 @@ async fn status(
     Json(json!({"state": state})).into_response()
 }
 
-/// Type one field into the sign-in window, then press Enter.
+/// Type one field into the sign-in window, then press Enter (or Tab, for Twitch's username).
 async fn send(
     State(pairing): State<Pairing>,
     Path(token): Path<String>,
@@ -468,7 +513,8 @@ async fn send(
             "the sign-in window isn't open yet: press Open Firefox sign-in on the TV, then try again",
         );
     }
-    match type_and_enter(pid, &text).await {
+    let key = pairing.submit_key(&token, step).await;
+    match type_and_submit(pid, &text, key).await {
         Ok(()) => Json(json!({"status": "ok"})).into_response(),
         Err(err) => {
             pairing.release(&token, step).await;
@@ -499,7 +545,7 @@ async fn focus_window(pid: Option<u32>) -> Result<String> {
     Ok(window)
 }
 
-async fn type_and_enter(pid: Option<u32>, text: &str) -> Result<()> {
+async fn type_and_submit(pid: Option<u32>, text: &str, key: &str) -> Result<()> {
     focus_window(pid).await?;
     // The text goes in on stdin, never as an argument, so `ps` can't show it. xdotool runs
     // without `--window` on purpose: that mode sends synthetic events Firefox ignores.
@@ -518,9 +564,9 @@ async fn type_and_enter(pid: Option<u32>, text: &str) -> Result<()> {
     if !status.success() {
         bail!("xdotool type exited with {status}");
     }
-    // Re-check focus so Enter doesn't land in another window if focus moved while typing.
+    // Re-check focus so the key doesn't land in another window if focus moved while typing.
     focus_window(pid).await?;
-    xdotool(&["key", "--clearmodifiers", "Return"]).await?;
+    xdotool(&["key", "--clearmodifiers", key]).await?;
     Ok(())
 }
 
@@ -711,6 +757,29 @@ mod tests {
         let response = pairing.hello(&token, &sealed(&key, other, "hello", 0)).await;
         assert_eq!(response.status(), StatusCode::CONFLICT);
         assert!(pairing.phone().await.unwrap().confirmed);
+    }
+
+    #[tokio::test]
+    async fn the_site_is_set_per_session_and_told_to_the_phone_inside_the_sealed_hello() {
+        let (pairing, token, key) = session().await;
+        assert_eq!(pairing.submit_key(&token, Step::Email).await, "Return", "Google is the default");
+        pairing.set_flow(Flow::Twitch).await;
+        assert_eq!(pairing.submit_key(&token, Step::Email).await, "Tab");
+        assert_eq!(pairing.submit_key("wrong-token", Step::Email).await, "Return", "an unknown token falls back safely");
+        let response = pairing.hello(&token, &sealed(&key, PHONE, "hello", 0)).await;
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let reply: Sealed = serde_json::from_slice(&body).unwrap();
+        let plain = XSalsa20Poly1305::new(GenericArray::from_slice(&key))
+            .decrypt(GenericArray::from_slice(&unhex(&reply.n).unwrap()), unhex(&reply.c).unwrap().as_slice())
+            .unwrap();
+        let reply: Value = serde_json::from_slice(&plain).unwrap();
+        assert_eq!(reply["service"], "twitch");
+        assert_eq!(reply["code"].as_str().unwrap().len(), 6);
+        // A reset (a rejected code) keeps the site.
+        pairing.reset().await.unwrap();
+        let fresh = pairing.session.lock().await.as_ref().unwrap().token.clone();
+        assert_ne!(fresh, token);
+        assert_eq!(pairing.submit_key(&fresh, Step::Email).await, "Tab");
     }
 
     #[tokio::test]

@@ -152,6 +152,15 @@ const twitchQuery = (params: Record<string, string | undefined>, refresh: boolea
   return text ? `?${text}` : ''
 }
 /** `unofficial` (Twitch's web API, no registration) or `official` (Helix with a registered application). */
+/** Sign in to Twitch in this profile's own Firefox window (the phone keyboard works as for YouTube). */
+export const twitchSignin = (id: string) => playback<LoginStatus>(`twitch/profiles/${encodeURIComponent(id)}/signin`, {})
+export const twitchLoginStatus = (id: string, check = false) =>
+  playback<LoginStatus>(`twitch/profiles/${encodeURIComponent(id)}/status${check ? '?check=true' : ''}`)
+/** The phone link for a Twitch sign-in; the phone page then words its steps for Twitch. */
+export const startTwitchPairing = () => playback<Pairing>('pairing?service=twitch', {})
+/** Live channels the active profile follows (needs a signed-in Twitch profile). */
+export const twitchFollowing = (refresh = false) =>
+  playback<TwitchPage<TwitchStream>>(`twitch/following${twitchQuery({}, refresh)}`)
 /** Watch a live channel in the CouchTube window; the page to show comes from `playerStatus()`. */
 export const twitchPlay = (login: string) => playback<{ status: string }>('twitch/play', { login })
 export const twitchStatus = () => playback<{ source: 'official' | 'unofficial' }>('twitch/status')
