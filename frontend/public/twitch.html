@@ -20,12 +20,20 @@
 <div id="wait">Connecting to Twitch…</div>
 <div id="osd"></div>
 <script>
-// Plays one live Twitch channel in Twitch's embedded player and mirrors what the YouTube page
-// does: the backend gets pause state and "playing" from here, and sends back the same commands
-// the phone remote and keyboard use. Live streams have no seeking, subtitles or queue.
+// Plays one live Twitch channel, past broadcast (VOD) or clip in Twitch's embedded player and
+// mirrors what the YouTube page does: the backend gets position, pause state and "playing" from
+// here, and sends back the same commands the phone remote and keyboard use. Live streams have no
+// seeking; broadcasts seek and report their position (the backend saves it for resuming); a clip
+// plays in Twitch's clip embed, which has no scripting API, so it only starts and can be stopped.
+// Subtitles and the queue do not exist here.
 const params = new URLSearchParams(location.search)
 const channel = /^[A-Za-z0-9_]{1,25}$/.test(params.get('c') || '') ? params.get('c') : ''
+const video = /^[0-9]{1,20}$/.test(params.get('v') || '') ? params.get('v') : ''
+const clip = /^[A-Za-z0-9_-]{1,100}$/.test(params.get('clip') || '') ? params.get('clip') : ''
+const startAt = Math.max(0, Math.floor(Number(params.get('t')) || 0))
 const session = Number(params.get('s'))
+const kind = video ? 'vod' : clip ? 'clip' : 'live'
+const label = video ? 'Broadcast' : clip ? 'Clip' : channel
 
 // What the backend is told when the page gives up (see `twitch_error` in src/player.rs).
 const OFFLINE = -4
@@ -54,13 +62,17 @@ function show(text, ms = 2500, live = false) {
 }
 
 function snapshot() {
+  // A clip has no player API: once its frame loaded, say it started (position 0) and nothing more.
+  if (kind === 'clip') return { position: playing ? 0 : undefined, title: label }
   if (!ready) return {}
   const seconds = playing ? Number(player.getCurrentTime()) : NaN
+  const length = kind === 'vod' && playing ? Number(player.getDuration()) : NaN
   return {
+    duration: Number.isFinite(length) && length > 0 ? length : undefined,
     // The backend treats the first position as "the stream started", so only send one once playing.
     position: Number.isFinite(seconds) && seconds >= 0 ? seconds : playing ? 0 : undefined,
     paused: player.isPaused(),
-    title: channel,
+    title: label,
   }
 }
 
@@ -87,12 +99,18 @@ function finish(outcome, extra = {}) {
   void report({ outcome, ...extra })
 }
 
-// The commands are mpv's, as sent by the remote: ["cycle","pause"], ["add","volume",2]. Seeking and
-// subtitles do not exist for a live stream and are ignored.
+// The commands are mpv's, as sent by the remote: ["cycle","pause"], ["seek",10], ["add","volume",2].
+// Subtitles do not exist here, and seeking only for a broadcast.
 function run(command) {
   if (!ready || !Array.isArray(command)) return
   const [name, a, b] = command
-  if (name === 'cycle' && a === 'pause') togglePause()
+  if (name === 'seek' && typeof a === 'number') {
+    if (kind !== 'vod' || !playing) return
+    const length = Number(player.getDuration())
+    const target = Math.max(0, Number(player.getCurrentTime()) + a)
+    player.seek(Number.isFinite(length) && length > 0 ? Math.min(target, Math.max(0, length - 1)) : target)
+    show(`${a > 0 ? '+' : '−'}${Math.abs(a)} s · ${clock(target)}`, 1500)
+  } else if (name === 'cycle' && a === 'pause') togglePause()
   else if (name === 'cycle' && a === 'mute') {
     const muted = !player.getMuted()
     player.setMuted(muted)
@@ -104,6 +122,14 @@ function run(command) {
     if (volume > 0 && player.getMuted()) player.setMuted(false)
     show(`Volume ${Math.round(volume * 100)}`, 1200)
   }
+}
+
+function clock(seconds) {
+  const total = Math.max(0, Math.floor(seconds))
+  const h = Math.floor(total / 3600)
+  const m = String(Math.floor((total % 3600) / 60)).padStart(h ? 2 : 1, '0')
+  const sec = String(total % 60).padStart(2, '0')
+  return h ? `${h}:${m}:${sec}` : `${m}:${sec}`
 }
 
 function togglePause() {
@@ -123,13 +149,38 @@ document.addEventListener('keydown', (event) => {
   else if (key === '9') run(['add', 'volume', -5])
   else if (key === '0') run(['add', 'volume', 5])
   else if (key === 'm') run(['cycle', 'mute'])
-  else if (key === 'i') show(`${channel}`, 4000, true)
+  else if (key === 'ArrowLeft') run(['seek', -10])
+  else if (key === 'ArrowRight') run(['seek', 10])
+  else if (key === 'ArrowUp') run(['seek', 60])
+  else if (key === 'ArrowDown') run(['seek', -60])
+  else if (key === 'i') info(4000)
 })
 
+function info(ms) {
+  if (kind === 'live') show(channel, ms, true)
+  else if (kind === 'vod' && playing) show(`${label} · ${clock(player.getCurrentTime())} / ${clock(player.getDuration())}`, ms)
+  else show(label, ms)
+}
+
+// A clip: Twitch's clip embed has no player API, so the page only knows it was loaded.
+function startClip() {
+  const frame = document.createElement('iframe')
+  frame.allow = 'autoplay; fullscreen'
+  frame.src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(clip)}&parent=${encodeURIComponent(location.hostname)}&autoplay=true&muted=false`
+  frame.onload = () => {
+    ready = false
+    playing = true
+    document.getElementById('wait').classList.add('off')
+    show(label, 3000)
+  }
+  document.getElementById('player').appendChild(frame)
+}
+
 function start() {
-  if (!channel) { finish('error', { code: SCRIPT_FAILED }); return }
+  if (kind === 'clip') { startClip(); return }
+  if (!channel && !video) { finish('error', { code: SCRIPT_FAILED }); return }
   player = new Twitch.Player('player', {
-    channel,
+    ...(video ? { video: `v${video}`, time: startAt ? `${Math.floor(startAt / 3600)}h${Math.floor((startAt % 3600) / 60)}m${startAt % 60}s` : '0s' } : { channel }),
     // Twitch only embeds on the hosts it is told about: this page's own (127.0.0.1 or localhost).
     parent: [location.hostname],
     width: '100%',
@@ -143,15 +194,15 @@ function start() {
     player.play()
   })
   player.addEventListener(Twitch.Player.PLAYING, () => {
-    if (!playing) show(channel, 3000, true)
+    if (!playing) info(3000)
     playing = true
     document.getElementById('wait').classList.add('off')
   })
   // Autoplay can be refused; the first key press then starts it.
   player.addEventListener(Twitch.Player.PLAYBACK_BLOCKED, () => show('Press Space to play', 6000))
   player.addEventListener(Twitch.Player.OFFLINE, () => finish('error', { code: OFFLINE }))
-  // A live channel that "ends" went offline.
-  player.addEventListener(Twitch.Player.ENDED, () => finish('error', { code: OFFLINE }))
+  // A live channel that "ends" went offline; a broadcast that ends was watched to the end.
+  player.addEventListener(Twitch.Player.ENDED, () => (kind === 'vod' ? finish('eof') : finish('error', { code: OFFLINE })))
 }
 
 setInterval(() => { if (!finished) void report() }, 500)

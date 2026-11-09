@@ -63,7 +63,9 @@ src/
   pairing.html    phone page
   player.rs       the one player at a time: YouTube's embed page, legacy mpv + IPC, and Twitch live pages
   playback.rs     progress, watched sync, queue advancement
-  feeds.rs        account feeds, persistent cache and prefetch
+  feeds.rs        account feeds, persistent cache, stale-while-refresh and prefetch
+  thumbs.rs       YouTube thumbnail cache in `<data>/thumbs/` (served by `/api/thumb/<id>`)
+build.rs          embeds the git commit as `COUCHTUBE_COMMIT` (served by `/api/version`)
   discover.rs     For You discovery and ranking
   remote.rs       phone remote (port 7880, off until switched on) and remote.html
   cec.rs          HDMI-CEC TV power
@@ -76,7 +78,7 @@ src/
 frontend/         Vite + React + TS
   src/App.tsx     screens, back stack, keyboard handling
   src/nav.ts      2D focus logic (unit-tested in nav.test.ts)
-  src/api.ts      API client with a 10-minute cache
+  src/api.ts      API client with an in-memory cache and stale-list refresh
   src/ModeGate.tsx     first screen: YouTube or Twitch
   src/ProfileGate.tsx  YouTube Who's watching, sign-in and phone pairing screens
   src/TwitchGate.tsx   Twitch Who's watching screen
@@ -107,7 +109,8 @@ The full, current API table is in the [README](../README.md#api).
 - `progress(profile_id, video_id, position, duration, watched, marked, completed, updated_at)` drives Continue watching and watched sync
 - `queue(position, profile_id, video_id)`
 - `videos(profile_id, video_id, json)` caches metadata per profile
-- `feed_cache(profile_id, cache_key, json, expires_at)` stores feed/search/channel responses
+- `feed_cache(profile_id, cache_key, json, expires_at)` stores feed/search/channel responses; expired rows are kept for `STALE_SECS` (7 days) so they can be shown while refreshing
+- `<data>/thumbs/` (files, not SQLite) holds saved YouTube thumbnails, at most 2000, trimmed to the newest 1500
 - `seeds` and `dismissed` back For You (see [`for-you.md`](for-you.md))
 - `remote_devices` holds the phone remote's paired phones (token hashes only)
 - `twitch_profiles` is a separate list from `profiles` (its own Guest); `settings` also keeps `mode` and `twitch_active_profile`

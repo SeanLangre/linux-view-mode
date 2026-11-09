@@ -94,6 +94,12 @@ impl Database {
                 id TEXT PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL,
                 created_at INTEGER NOT NULL DEFAULT (unixepoch())
             );
+            CREATE TABLE IF NOT EXISTS twitch_progress (
+                profile_id TEXT NOT NULL REFERENCES twitch_profiles(id) ON DELETE CASCADE,
+                video_id TEXT NOT NULL, position REAL NOT NULL, duration REAL,
+                completed INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                PRIMARY KEY(profile_id, video_id)
+            );
             INSERT OR IGNORE INTO twitch_profiles(id, name, color) VALUES ('guest', 'Guest', '#707887');
             INSERT OR IGNORE INTO settings(key, value) VALUES ('twitch_active_profile', 'guest');
             INSERT OR IGNORE INTO profiles(id, name, color) VALUES ('guest', 'Guest', '#707887');
@@ -502,6 +508,41 @@ impl Database {
             tx.execute("INSERT INTO progress(profile_id,video_id,position,duration,watched,completed) VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(profile_id,video_id) DO UPDATE SET position=excluded.position,duration=excluded.duration,watched=progress.watched+excluded.watched,completed=excluded.completed,updated_at=unixepoch()", params![profile,video.id,position,duration,watched,completed])?;
             tx.commit()?; Ok(())
         }).await
+    }
+
+    /// Remembers where a Twitch profile stopped watching a past broadcast (`video_id` is its number).
+    pub async fn twitch_save_progress(&self, profile: &str, video: &str, position: f64, duration: Option<f64>, completed: bool) -> Result<()> {
+        let (profile, video) = (profile.to_owned(), video.to_owned());
+        self.with(move |db| {
+            db.execute(
+                "INSERT INTO twitch_progress(profile_id,video_id,position,duration,completed) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(profile_id,video_id) DO UPDATE SET position=excluded.position,duration=excluded.duration,completed=excluded.completed,updated_at=unixepoch()",
+                params![profile, video, position, duration, completed],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Where to resume a broadcast: not when finished, not within the first 5 s or the last 5 s.
+    pub async fn twitch_resume(&self, profile: &str, video: &str) -> Result<Option<f64>> {
+        let (profile, video) = (profile.to_owned(), video.to_owned());
+        self.with(move |db| Ok(db.query_row("SELECT position FROM twitch_progress WHERE profile_id=?1 AND video_id=?2 AND completed=0 AND position>=5 AND (duration IS NULL OR position < duration-5)", params![profile, video], |r| r.get(0)).optional()?)).await
+    }
+
+    /// The saved state of the given broadcasts: `(position, duration, completed)` by id.
+    pub async fn twitch_progress_for(&self, profile: &str, videos: Vec<String>) -> Result<std::collections::HashMap<String, (f64, Option<f64>, bool)>> {
+        let profile = profile.to_owned();
+        self.with(move |db| {
+            let mut statement = db.prepare("SELECT position,duration,completed FROM twitch_progress WHERE profile_id=?1 AND video_id=?2")?;
+            let mut found = std::collections::HashMap::new();
+            for id in videos {
+                if let Some(row) = statement.query_row(params![profile, id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()? {
+                    found.insert(id, row);
+                }
+            }
+            Ok(found)
+        })
+        .await
     }
 
     pub async fn resume(&self, profile: &str, id: &str) -> Result<Option<f64>> {

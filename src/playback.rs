@@ -17,6 +17,14 @@ pub struct Playback {
     pub player: Player,
     db: Database,
     session: Arc<Mutex<Option<Session>>>,
+    /// The Twitch broadcast being watched, if any: only its position is kept.
+    twitch: Arc<Mutex<Option<TwitchSession>>>,
+}
+struct TwitchSession {
+    token: u64,
+    profile: String,
+    video: String,
+    last_saved: Instant,
 }
 struct Session {
     token: u64,
@@ -34,6 +42,7 @@ impl Playback {
             player,
             db,
             session: Default::default(),
+            twitch: Default::default(),
         }
     }
     // Callers hold AppState.transition for every mutation/tick.
@@ -68,15 +77,40 @@ impl Playback {
         self.player.play_twitch(login).await?;
         Ok(())
     }
+    /// Watch a past broadcast as a Twitch profile, from its saved position unless `start` says otherwise.
+    pub async fn play_twitch_video(&self, profile: &str, video: &str, start: Option<f64>) -> Result<()> {
+        self.stop().await?;
+        let start = match start {
+            Some(start) => Some(start),
+            None => self.db.twitch_resume(profile, video).await?,
+        };
+        let token = self.player.play_twitch_video(video, start).await?;
+        *self.twitch.lock().await = Some(TwitchSession {
+            token,
+            profile: profile.to_owned(),
+            video: video.to_owned(),
+            last_saved: Instant::now(),
+        });
+        Ok(())
+    }
+    /// Watch a clip: no position is kept.
+    pub async fn play_twitch_clip(&self, slug: &str) -> Result<()> {
+        self.stop().await?;
+        self.player.play_twitch_clip(slug).await?;
+        Ok(())
+    }
     pub async fn stop(&self) -> Result<()> {
         let status = self.player.status().await?;
         self.save(&status, true, false).await?;
+        self.save_twitch(&status, true, false).await?;
         self.player.stop().await?;
         for ended in self.player.take_ended().await? {
             self.save(&ended.status, true, ended.reason == EndReason::Finished)
                 .await?;
+            self.save_twitch(&ended.status, true, ended.reason == EndReason::Finished).await?;
         }
         *self.session.lock().await = None;
+        *self.twitch.lock().await = None;
         Ok(())
     }
     pub async fn next(&self, account: Account) -> Result<bool> {
@@ -91,9 +125,11 @@ impl Playback {
     pub async fn tick(&self) -> Result<()> {
         let status = self.player.status().await?;
         self.save(&status, false, false).await?;
+        self.save_twitch(&status, false, false).await?;
         for ended in self.player.take_ended().await? {
             self.save(&ended.status, true, ended.reason == EndReason::Finished)
                 .await?;
+            self.save_twitch(&ended.status, true, ended.reason == EndReason::Finished).await?;
             let account = {
                 let mut session = self.session.lock().await;
                 if session
@@ -110,6 +146,19 @@ impl Playback {
             {
                 self.next(account).await?;
             }
+        }
+        Ok(())
+    }
+    /// Keeps a broadcast's position for its Twitch profile: every 5 s while it plays, and when it ends.
+    async fn save_twitch(&self, status: &Status, force: bool, completed: bool) -> Result<()> {
+        let mut session = self.twitch.lock().await;
+        let Some(session) = session.as_mut().filter(|s| Some(s.token) == status.session) else {
+            return Ok(());
+        };
+        let Some(position) = status.position else { return Ok(()) };
+        if force || session.last_saved.elapsed() >= Duration::from_secs(5) {
+            self.db.twitch_save_progress(&session.profile, &session.video, position, status.duration, completed).await?;
+            session.last_saved = Instant::now();
         }
         Ok(())
     }

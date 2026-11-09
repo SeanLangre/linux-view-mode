@@ -39,4 +39,4 @@ YouTube refreshes some login cookies over time, and a session that's never refre
 | Search | `ytsearch24:<query>` (personalized when signed in) |
 | Channel | `https://www.youtube.com/channel/<id>/videos` |
 
-All with `--flat-playlist -J --playlist-end N`. Results are cached per profile (Home and Subscriptions about 10 min, history about 2 min, search about 30 min). At most one yt-dlp request runs at a time per profile.
+All with `--flat-playlist -J --playlist-end N`. Results are cached per profile: fresh for 30 min (history 5 min, search 6 h, channels 1 h). An expired list is still returned at once for up to 7 days (`STALE_SECS` in `src/db.rs`) while one background request (`Feeds::refresh_later`) replaces it; the response then carries `x-cache: stale`. At most one yt-dlp request runs at a time per profile.

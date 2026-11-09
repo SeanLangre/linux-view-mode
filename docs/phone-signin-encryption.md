@@ -97,6 +97,9 @@ Replies stay plain JSON. They hold only status and error text, and an active att
 them anyway. The one exception is the `hello` reply, which carries the confirmation code and is
 encrypted.
 
+### Twitch sign-in
+The same pairing serves Twitch (`POST /api/pairing?service=twitch`). Twitch's login form has the username and password on one page, so the phone's first step types the username and presses **Tab** instead of Enter (`Flow::submit_key` in `src/pairing.rs`); the second step types the password and presses Enter, and a verification code, if Twitch asks, is a third step. The site name travels inside the sealed `hello` reply, so the phone page words its steps for Twitch (and shows "Twitch" next to the code) without a second, unprotected request.
+
 ### Confirmation code
 - **`POST /p/<token>/hello`** (LAN): body is `box({phone, seq: 0})`. Until the phone is confirmed,
   each hello **replaces** the bound phone and makes a new random 6-digit code. The reply is

@@ -182,6 +182,12 @@ export type TwitchStream = {
   viewers: number; thumb: string; started_at: string | null
 }
 export type TwitchChannel = { login: string; name: string; live: boolean; title: string; game_name: string; thumb: string }
+/** A past broadcast (`kind: 'vod'`, `id` its number) or a clip (`kind: 'clip'`, `id` its slug); `length` in seconds. */
+export type TwitchRecording = {
+  kind: 'vod' | 'clip'; id: string; title: string; game_name: string; views: number; length: number
+  created_at: string | null; thumb: string; resume_position?: number; completed?: boolean
+}
+export type TwitchChannelPage = { login: string; name: string; live: TwitchStream | null; items: TwitchRecording[]; cursor: string | null }
 export type TwitchPage<T> = { items: T[]; cursor: string | null }
 const twitchQuery = (params: Record<string, string | undefined>, refresh: boolean) => {
   const query = new URLSearchParams()
@@ -202,6 +208,12 @@ export const twitchFollowing = (refresh = false) =>
   playback<TwitchPage<TwitchStream>>(`twitch/following${twitchQuery({}, refresh)}`)
 /** Watch a live channel in the CouchTube window; the page to show comes from `playerStatus()`. */
 export const twitchPlay = (login: string) => playback<{ status: string }>('twitch/play', { login })
+/** A past broadcast from the active profile's saved position (or `start` seconds), or a clip. */
+export const twitchPlayVideo = (video: string, start?: number) => playback<{ status: string }>('twitch/play', { video, start })
+export const twitchPlayClip = (clip: string) => playback<{ status: string }>('twitch/play', { clip })
+/** A channel: its live stream (if on) and its past broadcasts (`vods`) or most watched clips. */
+export const twitchChannel = (login: string, kind: 'vods' | 'clips', cursor?: string, refresh = false) =>
+  playback<TwitchChannelPage>(`twitch/channel/${encodeURIComponent(login)}${twitchQuery({ kind, cursor }, refresh)}`)
 export const twitchStatus = () => playback<{ source: 'official' | 'unofficial' }>('twitch/status')
 export const twitchCategories = (cursor?: string, refresh = false) =>
   playback<TwitchPage<TwitchCategory>>(`twitch/categories${twitchQuery({ cursor }, refresh)}`)

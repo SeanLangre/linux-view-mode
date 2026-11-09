@@ -84,6 +84,7 @@ pub fn routes() -> Router<AppState> {
         .route("/twitch/following", get(following))
         .route("/twitch/status", get(status))
         .route("/twitch/play", post(play))
+        .route("/twitch/channel/{login}", get(channel))
         .route("/twitch/categories", get(categories))
         .route("/twitch/streams", get(streams))
         .route("/twitch/search", get(search))
@@ -95,26 +96,105 @@ async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({ "source": state.twitch.name() }))
 }
 
+/// What to play: a live channel (`login`), a past broadcast (`video`, digits, with an optional
+/// `start` in seconds; the active profile's saved position is used otherwise) or a `clip` slug.
 #[derive(Deserialize)]
 struct PlayRequest {
-    login: String,
+    login: Option<String>,
+    video: Option<String>,
+    clip: Option<String>,
+    start: Option<f64>,
 }
 
-/// Starts a live channel in the CouchTube window (the page named in `/api/status`).
+/// Starts a channel, broadcast or clip in the CouchTube window (the page named in `/api/status`).
 async fn play(
     State(state): State<AppState>,
     body: Result<Json<PlayRequest>, JsonRejection>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let Json(request) = body.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "expected {login} JSON"))?;
-    if !helix::is_login(&request.login) {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid channel name"));
-    }
+    let Json(request) = body.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "expected {login}, {video} or {clip} JSON"))?;
+    let bad = |what| ApiError::new(StatusCode::BAD_REQUEST, what);
     let _transition = state.transition.lock().await;
-    state.playback.play_twitch(&request.login).await.map_err(|err| {
+    let started = match (&request.login, &request.video, &request.clip) {
+        (Some(login), None, None) => {
+            if !helix::is_login(login) {
+                return Err(bad("invalid channel name"));
+            }
+            state.playback.play_twitch(login).await
+        }
+        (None, Some(video), None) => {
+            if !helix::is_id(video) {
+                return Err(bad("invalid video id"));
+            }
+            if request.start.is_some_and(|s| !s.is_finite() || !(0.0..=1_000_000.0).contains(&s)) {
+                return Err(bad("invalid start position"));
+            }
+            let profile = state.profiles.db.twitch_active().await.map_err(internal)?;
+            state.playback.play_twitch_video(&profile.id, video, request.start).await
+        }
+        (None, None, Some(clip)) => {
+            if !gql::is_slug(clip) {
+                return Err(bad("invalid clip"));
+            }
+            state.playback.play_twitch_clip(clip).await
+        }
+        _ => return Err(bad("send exactly one of login, video or clip")),
+    };
+    started.map_err(|err| {
         tracing::error!("could not start Twitch playback: {err:#}");
         ApiError::new(StatusCode::BAD_GATEWAY, "could not start the player, check the server log")
     })?;
     Ok(Json(json!({ "status": "starting" })))
+}
+
+#[derive(Deserialize)]
+struct ChannelQuery {
+    /// `vods` (default) or `clips`.
+    kind: Option<String>,
+    cursor: Option<String>,
+    #[serde(default)]
+    refresh: bool,
+}
+
+/// A channel's live stream (if on), and its past broadcasts or clips. Uses Twitch's web API
+/// whichever source browses, like Following. Broadcasts carry the active profile's resume state.
+async fn channel(
+    State(state): State<AppState>,
+    Path(login): Path<String>,
+    params: Result<Query<ChannelQuery>, QueryRejection>,
+) -> Result<Json<gql::ChannelPage>, ApiError> {
+    let Query(params) = params.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid query"))?;
+    if !helix::is_login(&login) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid channel name"));
+    }
+    if params.cursor.as_deref().is_some_and(|c| !helix::valid_cursor(c)) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid cursor"));
+    }
+    let clips = match params.kind.as_deref() {
+        None | Some("vods") => false,
+        Some("clips") => true,
+        Some(_) => return Err(ApiError::new(StatusCode::BAD_REQUEST, "kind is vods or clips")),
+    };
+    let mut page = state
+        .twitch
+        .web()
+        .channel(&login, clips, params.cursor.as_deref(), params.refresh)
+        .await
+        .map_err(upstream("channel"))?
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such channel"))?;
+    if !clips && !page.items.is_empty() {
+        let profile = state.profiles.db.twitch_active().await.map_err(internal)?;
+        let ids = page.items.iter().map(|v| v.id.clone()).collect();
+        let saved = state.profiles.db.twitch_progress_for(&profile.id, ids).await.map_err(internal)?;
+        for item in &mut page.items {
+            if let Some(&(position, duration, completed)) = saved.get(&item.id) {
+                item.completed = completed;
+                if !completed && position >= 5.0 && duration.is_none_or(|d| position < d - 5.0) {
+                    item.resume_position = Some(position);
+                }
+            }
+        }
+    }
+    Ok(Json(page))
 }
 
 #[derive(Deserialize)]
@@ -387,4 +467,26 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    #[tokio::test]
+    async fn broadcast_positions_are_kept_per_twitch_profile_and_removed_with_it() {
+        let (db, path) = temp_db("progress");
+        let alice = db.twitch_create("Alice", "#aabbcc").await.unwrap();
+        db.twitch_save_progress(&alice.id, "111", 600.0, Some(7200.0), false).await.unwrap();
+        assert_eq!(db.twitch_resume(&alice.id, "111").await.unwrap(), Some(600.0));
+        assert_eq!(db.twitch_resume("guest", "111").await.unwrap(), None, "another profile has its own place");
+        // Too early, nearly at the end and finished broadcasts start from the beginning.
+        db.twitch_save_progress(&alice.id, "111", 3.0, Some(7200.0), false).await.unwrap();
+        assert_eq!(db.twitch_resume(&alice.id, "111").await.unwrap(), None);
+        db.twitch_save_progress(&alice.id, "111", 7198.0, Some(7200.0), false).await.unwrap();
+        assert_eq!(db.twitch_resume(&alice.id, "111").await.unwrap(), None);
+        db.twitch_save_progress(&alice.id, "111", 900.0, Some(7200.0), true).await.unwrap();
+        assert_eq!(db.twitch_resume(&alice.id, "111").await.unwrap(), None);
+        let saved = db.twitch_progress_for(&alice.id, vec!["111".into(), "222".into()]).await.unwrap();
+        assert_eq!(saved.len(), 1);
+        assert!(saved["111"].2);
+        db.twitch_remove(&alice.id).await.unwrap();
+        assert!(db.twitch_progress_for(&alice.id, vec!["111".into()]).await.unwrap().is_empty());
+        drop(db);
+        std::fs::remove_file(path).unwrap();
+    }
 }

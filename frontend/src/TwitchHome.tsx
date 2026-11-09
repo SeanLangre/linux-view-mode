@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import * as api from './api'
+import { formatAge, formatDuration, formatViews } from './format'
 
 type Screen =
   | { kind: 'home' }
@@ -8,10 +9,18 @@ type Screen =
   | { kind: 'categories' }
   | { kind: 'category'; id: string; name: string }
   | { kind: 'search' }
+  | { kind: 'channel'; login: string; name: string; tab: 'vods' | 'clips' }
 type Entry = { screen: Screen; focus: number }
-type Target = Screen | { kind: 'watch'; login: string; name: string } | { kind: 'offline'; name: string }
-/** One card in a grid: a stream, a category or a channel. */
-type Card = { key: string; art: string; portrait: boolean; title: string; meta: string; live: boolean; target: Target }
+type Target =
+  | Screen
+  | { kind: 'watch'; login: string; name: string }
+  | { kind: 'vod'; id: string; name: string; resume?: number }
+  | { kind: 'clip'; id: string; name: string }
+/** One card in a grid: a stream, a category, a channel, a broadcast or a clip. `channel` is where **C** goes. */
+type Card = {
+  key: string; art: string; portrait: boolean; title: string; meta: string; live: boolean; target: Target
+  channel?: { login: string; name: string }; badge?: { text: string; watched: boolean }; length?: string
+}
 
 /** Cards per row: category art is portrait, so more of it fits. */
 const columnsFor = (screen: Screen) => (screen.kind === 'categories' ? 6 : 4)
@@ -30,12 +39,22 @@ const categoryCard = (c: api.TwitchCategory): Card => ({
 const streamCard = (s: api.TwitchStream): Card => ({
   key: `s${s.login}`, art: s.thumb, portrait: false, title: s.title || s.name,
   meta: [s.name, s.game_name, viewers(s.viewers)].filter(Boolean).join(' · '), live: true,
-  target: { kind: 'watch', login: s.login, name: s.name },
+  target: { kind: 'watch', login: s.login, name: s.name }, channel: { login: s.login, name: s.name },
 })
 const channelCard = (c: api.TwitchChannel): Card => ({
   key: `h${c.login}`, art: c.thumb, portrait: false, title: c.name,
   meta: c.live ? [c.game_name, c.title].filter(Boolean).join(' · ') : 'Offline', live: c.live,
-  target: c.live ? { kind: 'watch', login: c.login, name: c.name } : { kind: 'offline', name: c.name },
+  // A channel opens its own screen: live stream first, then its broadcasts and clips.
+  target: { kind: 'channel', login: c.login, name: c.name, tab: 'vods' }, channel: { login: c.login, name: c.name },
+})
+const recordingCard = (r: api.TwitchRecording, channel: { login: string; name: string }): Card => ({
+  key: `${r.kind}${r.id}`, art: r.thumb, portrait: false, title: r.title || (r.kind === 'clip' ? 'Clip' : 'Broadcast'),
+  meta: [r.game_name, formatViews(r.views), formatAge(r.created_at ? Date.parse(r.created_at) / 1000 : null)].filter(Boolean).join(' · '),
+  live: false, length: formatDuration(r.length),
+  badge: r.completed ? { text: '✓ Watched', watched: true }
+    : r.resume_position !== undefined ? { text: `Resume ${formatDuration(r.resume_position)}`, watched: false } : undefined,
+  target: r.kind === 'clip' ? { kind: 'clip', id: r.id, name: channel.name } : { kind: 'vod', id: r.id, name: channel.name, resume: r.resume_position },
+  channel,
 })
 
 async function fetchPage(screen: Screen, query: string, cursor: string | undefined, refresh: boolean) {
@@ -52,15 +71,22 @@ async function fetchPage(screen: Screen, query: string, cursor: string | undefin
       const p = await api.twitchSearch(query, cursor, refresh)
       return { cards: p.items.map(channelCard), cursor: p.cursor }
     }
+    case 'channel': {
+      const p = await api.twitchChannel(screen.login, screen.tab, cursor, refresh)
+      const who = { login: p.login, name: p.name }
+      // The live stream comes first, on the first page only.
+      const live = p.live && !cursor ? [{ ...streamCard(p.live), key: 'live' }] : []
+      return { cards: [...live, ...p.items.map((r) => recordingCard(r, who))], cursor: p.cursor }
+    }
     default: return { cards: [], cursor: null }
   }
 }
 
 const screenKey = (screen: Screen, query: string) =>
-  screen.kind === 'category' ? `category:${screen.id}` : screen.kind === 'search' ? `search:${query}` : screen.kind
+  screen.kind === 'category' ? `category:${screen.id}` : screen.kind === 'channel' ? `channel:${screen.login}:${screen.tab}` : screen.kind === 'search' ? `search:${query}` : screen.kind
 const titleOf = (screen: Screen) =>
   ({ home: 'Twitch', following: 'Following', live: 'Top live streams', categories: 'Categories', search: 'Search Twitch' }[screen.kind as string]
-    ?? (screen.kind === 'category' ? screen.name : ''))
+    ?? (screen.kind === 'category' ? screen.name : screen.kind === 'channel' ? `${screen.name} · ${screen.tab === 'vods' ? 'Past broadcasts' : 'Top clips'}` : ''))
 
 /** The Twitch screens after a profile is chosen: Home, Top live, Categories, a category, Search. */
 export default function TwitchHome({ profile, onProfile, onService }: { profile: api.TwitchProfile; onProfile: () => void; onService: () => void }) {
@@ -140,11 +166,19 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
     }
   }
   function open(target: Target) {
-    if (target.kind === 'watch') void startStream(target.login, target.name)
-    else if (target.kind === 'offline') setNote(`${target.name} is offline right now.`)
+    if (target.kind === 'watch') void startStream(() => api.twitchPlay(target.login), `twitch:${target.login}`, target.name)
+    else if (target.kind === 'vod') void startStream(() => api.twitchPlayVideo(target.id), `twitch:vod:${target.id}`, target.name)
+    else if (target.kind === 'clip') void startStream(() => api.twitchPlayClip(target.id), `twitch:clip:${target.id}`, target.name)
     else push(target)
   }
-  async function startStream(login: string, name: string) {
+  /** Switches the open channel between its past broadcasts and its clips. */
+  function switchTab() {
+    if (screen.kind !== 'channel') return
+    const tab = screen.tab === 'vods' ? 'clips' : 'vods'
+    setNote(null)
+    setStack((s) => [...s.slice(0, -1), { screen: { ...screen, tab }, focus: 0 }])
+  }
+  async function startStream(begin: () => Promise<unknown>, id: string, name: string) {
     if (startingRef.current) return
     startingRef.current = true
     playbackRevision.current++
@@ -153,9 +187,9 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
     setPlaybackError(null)
     setNote(`Starting ${name}…`)
     try {
-      await api.twitchPlay(login)
+      await begin()
       wasPlaying.current = true
-      setPlayback({ playing: true, id: `twitch:${login}`, title: name, position: null, duration: null, paused: false, error: null })
+      setPlayback({ playing: true, id, title: name, position: null, duration: null, paused: false, error: null })
     } catch (err) {
       setPlaybackError((err as Error).message)
       setNote(null)
@@ -258,6 +292,12 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
         if (screen.kind === 'search' && index >= 0 && index + offset < 0) { panel.current?.querySelector<HTMLInputElement>('input')?.focus(); return }
         buttons[Math.max(0, Math.min(buttons.length - 1, index + offset))]?.focus()
       } else if (event.key === 'u' && isGrid) { refreshNext.current = true; setRevision((r) => r + 1) }
+      else if (event.key === 't' && screen.kind === 'channel') switchTab()
+      else if (event.key === 'c' && isGrid) {
+        const index = focusIndex()
+        const channel = cards[index]?.channel
+        if (channel && !(screen.kind === 'channel' && screen.login === channel.login)) push({ kind: 'channel', login: channel.login, name: channel.name, tab: 'vods' })
+      }
       else if (event.key === '/' && screen.kind !== 'search') { event.preventDefault(); push({ kind: 'search' }) }
       else if (event.key === 'p') onProfile()
     }
@@ -288,12 +328,14 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
         {error && <p className="status error" role="alert">{error} <button data-nav onClick={() => setRevision((r) => r + 1)}>Retry</button></p>}
         {loading && cards.length === 0 && <p className="status">Loading…</p>}
         {!loading && !error && cards.length === 0 && (screen.kind !== 'search' || query) &&
-          <p className="status">{screen.kind === 'search' ? 'No channels found.' : screen.kind === 'following' ? 'None of the channels you follow are live right now.' : 'Nothing here right now.'}</p>}
+          <p className="status">{screen.kind === 'search' ? 'No channels found.' : screen.kind === 'channel' ? 'No recordings yet.' : screen.kind === 'following' ? 'None of the channels you follow are live right now.' : 'Nothing here right now.'}</p>}
         <div className={`tw-grid ${screen.kind === 'categories' ? 'tw-six' : ''}`}>
           {cards.map((card) => <button type="button" data-nav key={card.key} className="card tw-card" onClick={() => open(card.target)}>
             <div className={`thumb ${card.portrait ? 'tw-portrait' : ''}`}>
               {card.art && <img src={card.art} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} />}
+              {card.badge && <span className={`resume-badge ${card.badge.watched ? 'watched-badge' : ''}`}>{card.badge.text}</span>}
               {card.live && <span className="badge live">LIVE</span>}
+              {card.length && <span className="badge">{card.length}</span>}
             </div>
             <div className="card-title">{card.title}</div>
             {card.meta && <div className="card-meta">{card.meta}</div>}
@@ -316,6 +358,8 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
       )}
       <footer className="hints"><span><kbd>← ↑ ↓ →</kbd>Move</span><span><kbd>Enter</kbd>Open</span><span><kbd>Esc</kbd>Back</span>
         {screen.kind !== 'search' && <span><kbd>/</kbd>Search</span>}
+        {screen.kind === 'channel' && <span><kbd>T</kbd>{screen.tab === 'vods' ? 'Clips' : 'Broadcasts'}</span>}
+        {isGrid && screen.kind !== 'channel' && screen.kind !== 'categories' && screen.kind !== 'search' && <span><kbd>C</kbd>Channel</span>}
         {isGrid && <span><kbd>U</kbd>Refresh</span>}
         <span><kbd>P</kbd>Profiles</span></footer>
     </main>

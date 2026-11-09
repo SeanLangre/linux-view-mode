@@ -132,6 +132,9 @@ impl Drop for Running {
 fn twitch_error(id: &str, code: i64) -> String {
     let channel = id.strip_prefix("twitch:").unwrap_or(id);
     match code {
+        -4 if channel.starts_with("clip:") || channel.starts_with("vod:") => {
+            "Twitch could not play this recording. It may have been deleted.".into()
+        }
         -4 => format!("{channel} is offline right now."),
         -3 => "Twitch did not start playing. Check the network and try again.".into(),
         _ => "Twitch could not play this stream. Try again.".into(),
@@ -221,12 +224,30 @@ impl Player {
         if !crate::helix::is_login(login) {
             bail!("invalid Twitch channel name");
         }
+        self.start_twitch(format!("twitch:{login}"), |sequence| format!("/twitch.html?c={login}&s={sequence}")).await
+    }
+    /// Plays a past broadcast (digits only) from `start` seconds. Its id is `twitch:vod:<id>` (not `twitch:v<id>`, which could be a channel called v1).
+    pub async fn play_twitch_video(&self, video: &str, start: Option<f64>) -> Result<u64> {
+        if !crate::helix::is_id(video) {
+            bail!("invalid Twitch video id");
+        }
+        let start = start.filter(|s| s.is_finite() && *s >= 1.0).map_or(0, |s| s as u64);
+        self.start_twitch(format!("twitch:vod:{video}"), |sequence| format!("/twitch.html?v={video}&t={start}&s={sequence}")).await
+    }
+    /// Plays a clip. Its id is `twitch:clip:<slug>`; clips have no position to resume.
+    pub async fn play_twitch_clip(&self, slug: &str) -> Result<u64> {
+        if !crate::gql::is_slug(slug) {
+            bail!("invalid Twitch clip");
+        }
+        self.start_twitch(format!("twitch:clip:{slug}"), |sequence| format!("/twitch.html?clip={slug}&s={sequence}")).await
+    }
+    async fn start_twitch(&self, id: String, page: impl FnOnce(u64) -> String) -> Result<u64> {
         let mut inner = self.0.lock().await;
         inner.stop().await?;
         inner.error = None;
         let launch = Launch { start: None, firefox: None, subtitles: None, twitch: true };
         let sequence = inner.sequence + 1;
-        let running = inner.launch_twitch_page(login, sequence, &launch);
+        let running = inner.launch_twitch_page(id, page(sequence), sequence, &launch);
         inner.sequence = sequence;
         inner.running = Some(running);
         Ok(sequence)
@@ -406,17 +427,17 @@ impl Inner {
         }
     }
 
-    /// A live Twitch session: the page plays the channel and reports like the YouTube page does.
-    fn launch_twitch_page(&self, login: &str, sequence: u64, launch: &Launch) -> Running {
+    /// A Twitch session: the page plays a channel, broadcast or clip and reports like the YouTube page does.
+    fn launch_twitch_page(&self, id: String, page: String, sequence: u64, launch: &Launch) -> Running {
         Running {
             child: None,
             directory: PathBuf::new(),
-            id: format!("twitch:{login}"),
+            id,
             sequence,
             details: Arc::new(StdMutex::new(Details::default())),
             observer: tokio::spawn(async {}),
             web: true,
-            page: Some(format!("/twitch.html?c={login}&s={sequence}")),
+            page: Some(page),
             started: Instant::now(),
             launch: launch.clone(),
         }
@@ -782,6 +803,30 @@ mod tests {
             assert!(player.play_twitch(bad).await.is_err(), "{bad:?}");
         }
         assert!(!player.status().await.unwrap().playing);
+    }
+
+    #[tokio::test]
+    async fn twitch_broadcasts_and_clips_get_their_own_pages_and_ids() {
+        let player = Player::new("config/mpv".into()).unwrap();
+        let session = player.play_twitch_video("2914038727", Some(125.7)).await.unwrap();
+        let status = player.status().await.unwrap();
+        assert_eq!(status.page, Some(format!("/twitch.html?v=2914038727&t=125&s={session}")));
+        assert_eq!(status.id.as_deref(), Some("twitch:vod:2914038727"));
+        // A deleted broadcast gets the recording message, not "is offline".
+        player.web_report(WebReport { session, outcome: Some("error".into()), code: Some(-4), ..Default::default() }).await;
+        assert!(player.status().await.unwrap().error.unwrap().contains("recording"));
+        player.take_ended().await.unwrap();
+        let session = player.play_twitch_clip("Tangential-ccA2_oB").await.unwrap();
+        let status = player.status().await.unwrap();
+        assert_eq!(status.page, Some(format!("/twitch.html?clip=Tangential-ccA2_oB&s={session}")));
+        assert_eq!(status.id.as_deref(), Some("twitch:clip:Tangential-ccA2_oB"));
+        player.stop().await.unwrap();
+        for bad in ["", "12a", "1 2", "../1"] {
+            assert!(player.play_twitch_video(bad, None).await.is_err(), "{bad:?}");
+        }
+        for bad in ["", "a b", "a/b", "a&b=c", &"a".repeat(101)] {
+            assert!(player.play_twitch_clip(bad).await.is_err(), "{bad:?}");
+        }
     }
 
     #[tokio::test]

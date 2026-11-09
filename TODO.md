@@ -6,8 +6,7 @@ Checklist for the [roadmap](docs/roadmap.md). Remove items once they are verifie
 
 Everything below was built on 2026-11-08/09 and is **uncommitted**. Suggested commits: (1) Twitch step 4 (sign-in, Following), (2) caching and thumbnails, (3) build version, (4) the test cleanup and the Firefox-player rewrite of `feeds_smoke.py`, (5) docs.
 
-**Caching and thumbnails: built and checked, but not documented yet**
-- [ ] Document it: README (the cache lines under "Watching, resume and queue" still say 10 min / 2 min / 30 min, and the API table needs `GET /api/thumb/<id>`, `GET /api/version` and the `x-cache: stale` header), `docs/accounts.md` (feed cache), `docs/design.md` (`thumbs.rs`, `build.rs`, the `thumbs/` data folder), `docs/roadmap.md`
+**Caching and thumbnails: built, checked and documented (2026-11-09)**
 - [ ] What changed: lists are fresh for 30 min (history 5 min, searches 6 h, channels 1 h, For You 30 min); an expired list is still shown at once for up to 7 days while one background request replaces it (`Feeds::refresh_later`), and the screen swaps in the new list about 6 s later (`x-cache: stale`, `refreshLater` in `frontend/src/api.ts`). YouTube thumbnails are saved in `<data>/thumbs/` (served by `/api/thumb/<id>`, only from `i.ytimg.com`, at most 2000 files, trimmed to the newest 1500) and every loaded list prefetches its pictures
 - [ ] Decide: expired private feeds used to be purged on every write and are now kept up to 7 days (so they can be shown stale). `STALE_SECS` in `src/db.rs` sets it; lower it if that feels too long
 - [ ] Not cached on purpose: Twitch pictures (live previews change constantly); the browser-side memory cache is still cleared on a profile switch (the backend copy makes that cheap now)
@@ -18,10 +17,9 @@ Everything below was built on 2026-11-08/09 and is **uncommitted**. Suggested co
 
 **Twitch: what is left**
 - [ ] Step 4 with a real login (the checklist is in the section below)
-- [ ] Step 5: channel screen with VODs and clips (`video=<id>` in the embed), VOD resume in `progress`, queue for VODs
+- [ ] Step 5 (built 2026-11-09, backend checked against the real Twitch, **not seen on screen**): search a channel → Enter opens its screen (live card first, then Past broadcasts; **T** switches to Top clips; **C** on any stream card opens its channel); a broadcast plays with arrows seeking ±10 s / ±60 s; press Esc, start it again: the card says Resume and it continues from there; a clip starts and Esc stops it. Check that the VOD starts at the saved time (`time=` in the embed) and that a VOD with ads/subscriber-only parts shows a clear failure. Still to build: the queue for VODs (needs its own Twitch queue table)
 - [ ] Step 6: chat pane (`t`) and the phone remote's Twitch support
 - [ ] Step 7 (only if uBlock Origin does not cope with Twitch's ads on the real TV): streamlink fallback
-- [ ] Add a short note about the Twitch sign-in to `docs/phone-signin-encryption.md` (the phone's first step presses Tab, and the sealed `hello` carries the site name)
 
 ## Phase 7 — Polish (implemented 2026-10-25, not tried on the real TV)
 

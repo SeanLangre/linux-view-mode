@@ -32,6 +32,8 @@ const BROWSER: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 
 
 /// Cards per first page, and how much each "load more" adds.
 pub const STEP: usize = 24;
+/// How many videos or clips one channel page can ask for.
+pub const MAX_RECORDINGS: usize = 100;
 /// Twitch's limits for `first` (checked 2026-11-08): categories 100, all streams 30, a category's streams ~100.
 pub const MAX_CATEGORIES: usize = 100;
 pub const MAX_TOP_STREAMS: usize = 30;
@@ -43,6 +45,8 @@ const GAME_STREAMS: &str = "query($id:ID!,$first:Int!){game(id:$id){streams(firs
 const TOP_STREAMS: &str = "query($first:Int!){streams(first:$first){edges{node{FIELDS}}}}";
 const CURRENT_USER: &str = "query{currentUser{login displayName}}";
 const FOLLOWING: &str = "query{currentUser{followedLiveUsers(first:100){edges{node{login displayName stream{id title viewersCount previewImageURL(width:440,height:248) game{id name} createdAt}}}}}}";
+const CHANNEL_VODS: &str = "query($l:String!,$first:Int!){user(login:$l){login displayName stream{id title viewersCount previewImageURL(width:440,height:248) game{id name} createdAt} videos(first:$first,type:ARCHIVE,sort:TIME){edges{node{id title lengthSeconds viewCount createdAt previewThumbnailURL(width:440,height:248) game{name}}}}}}";
+const CHANNEL_CLIPS: &str = "query($l:String!,$first:Int!){user(login:$l){login displayName stream{id title viewersCount previewImageURL(width:440,height:248) game{id name} createdAt} clips(first:$first,criteria:{period:ALL_TIME}){edges{node{slug title viewCount durationSeconds createdAt thumbnailURL(width:480,height:272) game{name}}}}}}";
 const SEARCH: &str = "query($q:String!){searchFor(userQuery:$q,platform:\"web\",options:{targets:[{index:CHANNEL}]}){channels{edges{item{... on User{login displayName profileImageURL(width:150) broadcastSettings{title game{name}} stream{id}}}}}}}";
 
 struct Inner {
@@ -215,6 +219,18 @@ impl Gql {
     }
 
     /// Twitch returns about 15 channels and no paging for a search.
+    /// A channel's past broadcasts (`clips` false) or its most watched clips, and its live stream if
+    /// it is on right now. `None` if there is no such channel.
+    pub async fn channel(&self, login: &str, clips: bool, cursor: Option<&str>, refresh: bool) -> Result<Option<ChannelPage>> {
+        let first = size(cursor, MAX_RECORDINGS);
+        let query = if clips { CHANNEL_CLIPS } else { CHANNEL_VODS };
+        let data = self.query(query, json!({ "l": login, "first": first }), TTL_LIVE, refresh).await?;
+        Ok(parse_channel(&data, clips).map(|(name, live, items)| {
+            let cursor = next(first, items.len(), MAX_RECORDINGS);
+            ChannelPage { login: login.to_owned(), name, live, items, cursor }
+        }))
+    }
+
     pub async fn search_channels(&self, text: &str, refresh: bool) -> Result<Page<Channel>> {
         let data = self.query(SEARCH, json!({ "q": text }), TTL_LIVE, refresh).await?;
         Ok(Page { items: parse_channels(&data), cursor: None })
@@ -264,6 +280,98 @@ fn client_id_from_page(page: &str) -> Option<String> {
 
 fn nodes(edges: &Value, key: &str) -> Vec<Value> {
     edges["edges"].as_array().map_or_else(Vec::new, |list| list.iter().map(|e| e[key].clone()).collect())
+}
+
+/// What a channel page shows: its live stream (if any) and one kind of recording.
+#[derive(serde::Serialize, Debug, PartialEq)]
+pub struct ChannelPage {
+    pub login: String,
+    pub name: String,
+    pub live: Option<Stream>,
+    pub items: Vec<Recording>,
+    pub cursor: Option<String>,
+}
+
+/// A past broadcast (`kind` is `vod`, `id` its number) or a clip (`kind` is `clip`, `id` its slug).
+#[derive(serde::Serialize, Debug, PartialEq)]
+pub struct Recording {
+    pub kind: &'static str,
+    pub id: String,
+    pub title: String,
+    pub game_name: String,
+    pub views: u64,
+    /// Seconds.
+    pub length: u64,
+    pub created_at: Option<String>,
+    pub thumb: String,
+    /// Filled per profile when a list is served (broadcasts only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resume_position: Option<f64>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub completed: bool,
+}
+
+/// A clip slug: letters, digits, `-` and `_`.
+pub fn is_slug(slug: &str) -> bool {
+    (1..=100).contains(&slug.len()) && slug.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// `(display name, live stream, recordings)`, or `None` when the user does not exist.
+pub fn parse_channel(data: &Value, clips: bool) -> Option<(String, Option<Stream>, Vec<Recording>)> {
+    let user = &data["user"];
+    if !user.is_object() {
+        return None;
+    }
+    let live = user["stream"].is_object().then(|| {
+        let s = &user["stream"];
+        Stream {
+            login: text(user, "login"),
+            name: text(user, "displayName"),
+            title: text(s, "title"),
+            game_id: text(&s["game"], "id"),
+            game_name: text(&s["game"], "name"),
+            viewers: s["viewersCount"].as_u64().unwrap_or(0),
+            thumb: image(text(s, "previewImageURL")),
+            started_at: s["createdAt"].as_str().map(str::to_owned),
+        }
+    });
+    let items = if clips {
+        nodes(&user["clips"], "node")
+            .iter()
+            .filter(|c| is_slug(c["slug"].as_str().unwrap_or_default()))
+            .map(|c| Recording {
+                kind: "clip",
+                id: text(c, "slug"),
+                title: text(c, "title"),
+                game_name: text(&c["game"], "name"),
+                views: c["viewCount"].as_u64().unwrap_or(0),
+                length: c["durationSeconds"].as_f64().unwrap_or(0.0) as u64,
+                created_at: c["createdAt"].as_str().map(str::to_owned),
+                thumb: image(text(c, "thumbnailURL")),
+                resume_position: None,
+                completed: false,
+            })
+            .collect()
+    } else {
+        nodes(&user["videos"], "node")
+            .iter()
+            .filter(|v| is_id(v["id"].as_str().unwrap_or_default()))
+            .map(|v| Recording {
+                kind: "vod",
+                id: text(v, "id"),
+                title: text(v, "title"),
+                game_name: text(&v["game"], "name"),
+                views: v["viewCount"].as_u64().unwrap_or(0),
+                length: v["lengthSeconds"].as_u64().unwrap_or(0),
+                created_at: v["createdAt"].as_str().map(str::to_owned),
+                thumb: image(text(v, "previewThumbnailURL")),
+                resume_position: None,
+                completed: false,
+            })
+            .collect()
+    };
+    let name = if text(user, "displayName").is_empty() { text(user, "login") } else { text(user, "displayName") };
+    Some((name, live, items))
 }
 
 pub fn parse_categories(data: &Value) -> Vec<Category> {
@@ -335,6 +443,28 @@ pub fn parse_channels(data: &Value) -> Vec<Channel> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_channel_page_reads_vods_clips_and_the_live_stream() {
+        let vods = json!({"user": {"login": "shroud", "displayName": "shroud", "stream": null, "videos": {"edges": [
+            {"node": {"id": "2914038727", "title": "Big drops", "lengthSeconds": 31361, "viewCount": 5, "createdAt": "2026-10-29T16:41:33Z",
+              "previewThumbnailURL": "https://static-cdn.jtvnw.net/x.jpg", "game": {"name": "AION 2"}}},
+            {"node": {"id": "not-a-number", "title": "bad"}}]}}});
+        let (name, live, items) = parse_channel(&vods, false).unwrap();
+        assert_eq!(name, "shroud");
+        assert!(live.is_none());
+        assert_eq!(items.len(), 1, "an id that is not digits is dropped");
+        assert_eq!((items[0].kind, items[0].id.as_str(), items[0].length), ("vod", "2914038727", 31361));
+        let clips = json!({"user": {"login": "a_b", "displayName": "", "stream": {"id": "1", "title": "t", "viewersCount": 9}, "clips": {"edges": [
+            {"node": {"slug": "Tangential-ccA2_oB", "title": "F", "viewCount": 7, "durationSeconds": 28.4, "thumbnailURL": "https://evil.example/x.jpg"}},
+            {"node": {"slug": "bad slug", "title": "x"}}]}}});
+        let (name, live, items) = parse_channel(&clips, true).unwrap();
+        assert_eq!(name, "a_b", "falls back to the login");
+        assert_eq!(live.unwrap().viewers, 9);
+        assert_eq!(items.len(), 1);
+        assert_eq!((items[0].kind, items[0].length, items[0].thumb.as_str()), ("clip", 28, ""), "pictures only from Twitch's host");
+        assert!(parse_channel(&json!({"user": null}), false).is_none());
+    }
 
     #[test]
     fn page_sizes_grow_by_a_step_up_to_twitchs_limits() {
