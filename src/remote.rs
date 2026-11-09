@@ -273,16 +273,27 @@ async fn state(State(lan): State<Lan>, headers: HeaderMap) -> Response {
         Ok(status) => status,
         Err(_) => return failure(StatusCode::INTERNAL_SERVER_ERROR, "could not read playback"),
     };
+    let db = &lan.app.profiles.db;
+    let twitch = db.mode().await.ok().flatten().as_deref() == Some("twitch");
     let (profile, queue) = {
         let _transition = lan.app.transition.lock().await;
-        let Ok(account) = lan.app.profiles.active().await else {
-            return failure(StatusCode::INTERNAL_SERVER_ERROR, "could not read the profile");
-        };
-        let queue = lan.app.profiles.db.queue(&account.profile.id).await.unwrap_or_default();
-        (account.profile.name, queue)
+        if twitch {
+            // The Twitch side has its own profiles and no queue.
+            let Ok(profile) = db.twitch_active().await else {
+                return failure(StatusCode::INTERNAL_SERVER_ERROR, "could not read the profile");
+            };
+            (profile.name, vec![])
+        } else {
+            let Ok(account) = lan.app.profiles.active().await else {
+                return failure(StatusCode::INTERNAL_SERVER_ERROR, "could not read the profile");
+            };
+            let queue = db.queue(&account.profile.id).await.unwrap_or_default();
+            (account.profile.name, queue)
+        }
     };
     Json(json!({
         "status": status,
+        "mode": if twitch { "twitch" } else { "youtube" },
         "profile": profile,
         "queue": queue.iter().map(|v| json!({"id": v.id, "title": v.title})).collect::<Vec<_>>(),
     }))
@@ -293,6 +304,25 @@ async fn state(State(lan): State<Lan>, headers: HeaderMap) -> Response {
 struct Command {
     cmd: String,
     value: Option<Value>,
+}
+
+/// A Twitch channel from a bare name or a twitch.tv link (`twitch.tv/<name>`; reserved paths such as
+/// `videos` or `directory` are not channels).
+pub fn twitch_login(text: &str) -> Option<String> {
+    let text = text.trim();
+    let name = match text.strip_prefix("https://").or_else(|| text.strip_prefix("http://")) {
+        Some(url) => {
+            let (host, rest) = url.split_once('/')?;
+            let host = host.strip_prefix("www.").or_else(|| host.strip_prefix("m.")).unwrap_or(host);
+            if host != "twitch.tv" {
+                return None;
+            }
+            rest.split(['/', '?', '#']).next()?
+        }
+        None => text.strip_prefix('@').unwrap_or(text),
+    };
+    let reserved = ["videos", "directory", "downloads", "jobs", "turbo", "settings", "subscriptions", "p", "popout", "embed", "clip"];
+    (crate::helix::is_login(name) && !reserved.contains(&name.to_ascii_lowercase().as_str())).then(|| name.to_owned())
 }
 
 /// A video id from a bare id or a youtube.com / youtu.be link.
@@ -332,6 +362,7 @@ async fn command(State(lan): State<Lan>, headers: HeaderMap, Json(body): Json<Co
         "mute" => Some(vec![json!("cycle"), json!("mute")]),
         "subtitles" => Some(vec![json!("cycle"), json!("sub")]),
         "seek" => number.map(|n| vec![json!("seek"), json!(n.clamp(-600.0, 600.0))]),
+        "chat" => Some(vec![json!("cycle"), json!("chat")]),
         "volume" => number.map(|n| vec![json!("add"), json!("volume"), json!(n.clamp(-20.0, 20.0))]),
         _ => None,
     };
@@ -346,6 +377,25 @@ async fn command(State(lan): State<Lan>, headers: HeaderMap, Json(body): Json<Co
         return failure(StatusCode::INTERNAL_SERVER_ERROR, "could not read the profile");
     };
     let db = &lan.app.profiles.db;
+    // On the Twitch side "play" takes a channel name or twitch.tv link; there is no queue or next.
+    if db.mode().await.ok().flatten().as_deref() == Some("twitch") {
+        let result = match body.cmd.as_str() {
+            "stop" => lan.app.playback.stop().await,
+            "play" => match body.value.as_ref().and_then(Value::as_str).and_then(twitch_login) {
+                Some(login) => lan.app.playback.play_twitch(&login).await,
+                None => return failure(StatusCode::BAD_REQUEST, "that is not a Twitch channel"),
+            },
+            "next" | "enqueue" | "dequeue" | "clear" => return failure(StatusCode::BAD_REQUEST, "Twitch has no queue"),
+            _ => return failure(StatusCode::BAD_REQUEST, "unknown command"),
+        };
+        return match result {
+            Ok(()) => Json(json!({"ok": true})).into_response(),
+            Err(err) => {
+                tracing::error!("remote command {} failed: {err:#}", body.cmd);
+                failure(StatusCode::BAD_GATEWAY, "the TV could not do that")
+            }
+        };
+    }
     let id = body.value.as_ref().and_then(Value::as_str).and_then(video_id);
     let result = match (body.cmd.as_str(), id) {
         ("stop", _) => lan.app.playback.stop().await,
@@ -375,7 +425,18 @@ async fn command(State(lan): State<Lan>, headers: HeaderMap, Json(body): Json<Co
 
 #[cfg(test)]
 mod tests {
-    use super::video_id;
+    use super::{twitch_login, video_id};
+
+    #[test]
+    fn finds_twitch_channels_in_names_and_links() {
+        let shroud = Some("shroud".to_owned());
+        for text in ["shroud", "@shroud", " shroud ", "https://www.twitch.tv/shroud", "https://twitch.tv/shroud/videos", "http://m.twitch.tv/shroud?sr=a"] {
+            assert_eq!(twitch_login(text), shroud, "{text}");
+        }
+        for text in ["", "a b", "https://evil.example/shroud", "https://twitch.tv/", "https://twitch.tv/videos/123", "https://twitch.tv/directory", "x/../y", &"a".repeat(26)] {
+            assert_eq!(twitch_login(text), None, "{text}");
+        }
+    }
 
     #[test]
     fn finds_video_ids_in_links() {

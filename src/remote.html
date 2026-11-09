@@ -46,19 +46,22 @@
     <button data-cmd="volume" data-value="-5">🔉 −</button>
     <button data-cmd="mute">🔇 Mute</button>
     <button data-cmd="volume" data-value="5">🔊 +</button>
-    <button data-cmd="subtitles">CC</button>
+    <button data-cmd="subtitles" data-for="youtube">CC</button>
+    <button data-cmd="chat" data-for="twitch">💬 Chat</button>
     <button data-cmd="stop" class="wide">⏹ Stop</button>
   </div>
   <form id="add">
-    <input id="link" type="url" inputmode="url" placeholder="Paste a YouTube link" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <input id="link" type="text" inputmode="url" placeholder="Paste a YouTube link" autocomplete="off" autocapitalize="off" spellcheck="false">
     <div class="grid">
       <button type="submit" data-cmd="play" class="wide">Play now</button>
-      <button type="submit" data-cmd="enqueue" class="wide">Add to queue</button>
+      <button type="submit" data-cmd="enqueue" data-for="youtube" class="wide">Add to queue</button>
     </div>
   </form>
-  <h2>Queue</h2>
-  <ul id="queue"></ul>
-  <button data-cmd="clear">Clear queue</button>
+  <div data-for="youtube">
+    <h2>Queue</h2>
+    <ul id="queue"></ul>
+    <button data-cmd="clear">Clear queue</button>
+  </div>
 </section>
 
 <script>
@@ -100,8 +103,14 @@
     const res = await fetch('/state', { headers: { Authorization: `Bearer ${device}` }, cache: 'no-store' })
     if (res.status === 401) { set(KEY, null); show('nopair'); say('This phone was forgotten on the TV.'); return false }
     if (!res.ok) { say('The TV did not answer.'); return true }
-    const { status, profile, queue } = await res.json()
+    const { status, mode, profile, queue } = await res.json()
     say('')
+    // The Twitch side has chat instead of subtitles, no queue and no "next"; "play" takes a channel.
+    const twitch = mode === 'twitch'
+    for (const el of document.querySelectorAll('[data-for]')) el.hidden = el.dataset.for !== mode
+    document.querySelector('button[data-cmd="next"]').disabled = twitch
+    $('link').placeholder = twitch ? 'Channel name or twitch.tv link' : 'Paste a YouTube link'
+    document.querySelector('#add button[data-cmd="play"]').textContent = twitch ? 'Watch now' : 'Play now'
     $('who').textContent = `Watching as ${profile}`
     $('title').textContent = status.playing ? (status.title || 'Loading…') : 'Nothing playing'
     $('time').textContent = status.playing && status.duration ? `${status.paused ? '⏸ ' : ''}${clock(status.position)} / ${clock(status.duration)}` : ''

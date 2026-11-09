@@ -47,6 +47,7 @@ const CURRENT_USER: &str = "query{currentUser{login displayName}}";
 const FOLLOWING: &str = "query{currentUser{followedLiveUsers(first:100){edges{node{login displayName stream{id title viewersCount previewImageURL(width:440,height:248) game{id name} createdAt}}}}}}";
 const CHANNEL_VODS: &str = "query($l:String!,$first:Int!){user(login:$l){login displayName stream{id title viewersCount previewImageURL(width:440,height:248) game{id name} createdAt} videos(first:$first,type:ARCHIVE,sort:TIME){edges{node{id title lengthSeconds viewCount createdAt previewThumbnailURL(width:440,height:248) game{name}}}}}}";
 const CHANNEL_CLIPS: &str = "query($l:String!,$first:Int!){user(login:$l){login displayName stream{id title viewersCount previewImageURL(width:440,height:248) game{id name} createdAt} clips(first:$first,criteria:{period:ALL_TIME}){edges{node{slug title viewCount durationSeconds createdAt thumbnailURL(width:480,height:272) game{name}}}}}}";
+const VIDEO_CHAT: &str = "query($id:ID!,$t:Int!){video(id:$id){comments(contentOffsetSeconds:$t){edges{node{contentOffsetSeconds commenter{displayName login} message{fragments{text} userColor}}} pageInfo{hasNextPage}}}}";
 const SEARCH: &str = "query($q:String!){searchFor(userQuery:$q,platform:\"web\",options:{targets:[{index:CHANNEL}]}){channels{edges{item{... on User{login displayName profileImageURL(width:150) broadcastSettings{title game{name}} stream{id}}}}}}}";
 
 struct Inner {
@@ -231,6 +232,13 @@ impl Gql {
         }))
     }
 
+    /// The chat replay of a past broadcast around `offset` seconds: Twitch answers with the stored
+    /// batch (about 60 messages) that contains that moment. Past chat never changes, so it is cached.
+    pub async fn video_chat(&self, video: &str, offset: u32) -> Result<ChatBatch> {
+        let data = self.query(VIDEO_CHAT, json!({ "id": video, "t": offset }), TTL_CATEGORIES, false).await?;
+        Ok(parse_chat(&data))
+    }
+
     pub async fn search_channels(&self, text: &str, refresh: bool) -> Result<Page<Channel>> {
         let data = self.query(SEARCH, json!({ "q": text }), TTL_LIVE, refresh).await?;
         Ok(Page { items: parse_channels(&data), cursor: None })
@@ -309,6 +317,48 @@ pub struct Recording {
     pub resume_position: Option<f64>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub completed: bool,
+}
+
+/// One line of a broadcast's chat replay; `at` is seconds into the broadcast.
+#[derive(serde::Serialize, Debug, PartialEq)]
+pub struct ChatMessage {
+    pub at: u64,
+    pub name: String,
+    /// `#rrggbb` or empty.
+    pub color: String,
+    pub text: String,
+}
+
+#[derive(serde::Serialize, Debug, PartialEq)]
+pub struct ChatBatch {
+    pub items: Vec<ChatMessage>,
+    pub more: bool,
+}
+
+fn is_color(color: &str) -> bool {
+    color.len() == 7 && color.starts_with('#') && color[1..].bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+pub fn parse_chat(data: &Value) -> ChatBatch {
+    let comments = &data["video"]["comments"];
+    let items = nodes(comments, "node")
+        .iter()
+        .filter(|n| n["message"].is_object())
+        .map(|n| {
+            let fragments = n["message"]["fragments"].as_array().map_or_else(String::new, |list| {
+                list.iter().filter_map(|f| f["text"].as_str()).collect::<String>()
+            });
+            let name = text(&n["commenter"], "displayName");
+            let color = text(&n["message"], "userColor");
+            ChatMessage {
+                at: n["contentOffsetSeconds"].as_u64().unwrap_or(0),
+                name: if name.is_empty() { text(&n["commenter"], "login") } else { name },
+                color: if is_color(&color) { color } else { String::new() },
+                text: fragments,
+            }
+        })
+        .collect();
+    ChatBatch { items, more: comments["pageInfo"]["hasNextPage"].as_bool().unwrap_or(false) }
 }
 
 /// A clip slug: letters, digits, `-` and `_`.
@@ -464,6 +514,23 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!((items[0].kind, items[0].length, items[0].thumb.as_str()), ("clip", 28, ""), "pictures only from Twitch's host");
         assert!(parse_channel(&json!({"user": null}), false).is_none());
+    }
+
+    #[test]
+    fn chat_replay_lines_are_flattened_and_colours_checked() {
+        let data = json!({"video": {"comments": {"pageInfo": {"hasNextPage": true}, "edges": [
+            {"node": {"contentOffsetSeconds": 449, "commenter": {"displayName": "KVK", "login": "kvk"},
+              "message": {"userColor": "#8A2BE2", "fragments": [{"text": "hello "}, {"text": "Kappa"}]}}},
+            {"node": {"contentOffsetSeconds": 450, "commenter": null,
+              "message": {"userColor": "red; x", "fragments": [{"text": "hi"}]}}},
+            {"node": {"contentOffsetSeconds": 451, "commenter": {"login": "bob"}, "message": null}}]}}});
+        let batch = parse_chat(&data);
+        assert!(batch.more);
+        assert_eq!(batch.items.len(), 2, "a line without a message is dropped");
+        assert_eq!((batch.items[0].at, batch.items[0].name.as_str(), batch.items[0].text.as_str()), (449, "KVK", "hello Kappa"));
+        assert_eq!(batch.items[0].color, "#8A2BE2");
+        assert_eq!(batch.items[1].color, "", "anything but #rrggbb is dropped");
+        assert_eq!(parse_chat(&json!({"video": null})), ChatBatch { items: vec![], more: false });
     }
 
     #[test]

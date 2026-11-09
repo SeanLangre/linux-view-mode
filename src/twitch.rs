@@ -85,6 +85,7 @@ pub fn routes() -> Router<AppState> {
         .route("/twitch/status", get(status))
         .route("/twitch/play", post(play))
         .route("/twitch/channel/{login}", get(channel))
+        .route("/twitch/chat/{video}", get(video_chat))
         .route("/twitch/categories", get(categories))
         .route("/twitch/streams", get(streams))
         .route("/twitch/search", get(search))
@@ -144,6 +145,26 @@ async fn play(
         ApiError::new(StatusCode::BAD_GATEWAY, "could not start the player, check the server log")
     })?;
     Ok(Json(json!({ "status": "starting" })))
+}
+
+#[derive(Deserialize)]
+struct ChatQuery {
+    /// Seconds into the broadcast.
+    t: Option<u32>,
+}
+
+/// The chat replay of a past broadcast around `t` seconds (read-only, no sign-in needed).
+async fn video_chat(
+    State(state): State<AppState>,
+    Path(video): Path<String>,
+    params: Result<Query<ChatQuery>, QueryRejection>,
+) -> Result<Json<gql::ChatBatch>, ApiError> {
+    let Query(params) = params.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid query"))?;
+    if !helix::is_id(&video) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid video id"));
+    }
+    let t = params.t.unwrap_or(0).min(10_000_000);
+    Ok(Json(state.twitch.web().video_chat(&video, t).await.map_err(upstream("chat"))?))
 }
 
 #[derive(Deserialize)]

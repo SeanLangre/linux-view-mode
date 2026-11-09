@@ -9,6 +9,7 @@ type Screen =
   | { kind: 'categories' }
   | { kind: 'category'; id: string; name: string }
   | { kind: 'search' }
+  | { kind: 'remote' }
   | { kind: 'channel'; login: string; name: string; tab: 'vods' | 'clips' }
 type Entry = { screen: Screen; focus: number }
 type Target =
@@ -29,6 +30,7 @@ const HOME_MENU = [
   { label: 'Top live streams', note: 'The most watched right now', screen: { kind: 'live' } as Screen },
   { label: 'Categories', note: 'Browse by game or topic', screen: { kind: 'categories' } as Screen },
   { label: 'Search', note: 'Find a channel', screen: { kind: 'search' } as Screen },
+  { label: 'Phone remote', note: 'Pause, volume and chat from a phone', screen: { kind: 'remote' } as Screen },
 ]
 const viewers = (count: number) => `${new Intl.NumberFormat('en', { notation: 'compact' }).format(count)} watching`
 
@@ -85,7 +87,7 @@ async function fetchPage(screen: Screen, query: string, cursor: string | undefin
 const screenKey = (screen: Screen, query: string) =>
   screen.kind === 'category' ? `category:${screen.id}` : screen.kind === 'channel' ? `channel:${screen.login}:${screen.tab}` : screen.kind === 'search' ? `search:${query}` : screen.kind
 const titleOf = (screen: Screen) =>
-  ({ home: 'Twitch', following: 'Following', live: 'Top live streams', categories: 'Categories', search: 'Search Twitch' }[screen.kind as string]
+  ({ home: 'Twitch', remote: 'Phone remote', following: 'Following', live: 'Top live streams', categories: 'Categories', search: 'Search Twitch' }[screen.kind as string]
     ?? (screen.kind === 'category' ? screen.name : screen.kind === 'channel' ? `${screen.name} · ${screen.tab === 'vods' ? 'Past broadcasts' : 'Top clips'}` : ''))
 
 /** The Twitch screens after a profile is chosen: Home, Top live, Categories, a category, Search. */
@@ -116,7 +118,8 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
   const entry = stack[stack.length - 1]
   const screen = entry.screen
   const key = screenKey(screen, query)
-  const isGrid = screen.kind !== 'home'
+  const isGrid = screen.kind !== 'home' && screen.kind !== 'remote'
+  const [remote, setRemote] = useState<api.RemoteInfo | null>(null)
 
   // Load the first page whenever the screen (or the search text, or a refresh) changes.
   useEffect(() => {
@@ -138,6 +141,45 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
     // `entry.focus` is only the position to return to; it must not reload the screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, revision])
+
+  // The remote screen shows the pairing QR code and watches for a phone saying hello (as on the YouTube side).
+  useEffect(() => {
+    if (screen.kind !== 'remote') { setRemote(null); return }
+    let cancelled = false
+    let timer: number
+    async function poll() {
+      try { const info = await api.remoteInfo(); if (!cancelled) setRemote(info) } catch { /* keep the last state */ }
+      if (!cancelled) timer = window.setTimeout(poll, 1000)
+    }
+    void poll()
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [screen.kind])
+
+  const remoteItems = !remote?.enabled ? [{ label: 'Turn on', action: 'remote-on' }]
+    : remote.code && !remote.confirmed ? [{ label: 'Yes, that’s my phone', action: 'remote-yes' }, { label: 'No', action: 'remote-no' }]
+    : [{ label: remote.url ? 'New link' : 'Pair a phone', action: 'remote-pair' },
+      ...(remote.devices > 0 ? [{ label: `Forget ${remote.devices} phone${remote.devices === 1 ? '' : 's'}`, action: 'remote-forget' }] : []),
+      { label: 'Turn off', action: 'remote-off' }]
+
+  async function remoteAction(action: string) {
+    try {
+      if (action === 'remote-on') setRemote(await api.setRemote(true))
+      else if (action === 'remote-off') setRemote(await api.setRemote(false))
+      else if (action === 'remote-pair') setRemote(await api.remotePair())
+      else if (action === 'remote-forget') { await api.forgetPhones(); setRemote(await api.remoteInfo()) }
+      else if (action === 'remote-yes' && remote?.code) { await api.remoteConfirm(remote.code); setRemote(await api.remoteInfo()) }
+      else if (action === 'remote-no') { await api.remoteReject(); setRemote(await api.remotePair()) }
+    } catch (err) { setNote((err as Error).message) }
+  }
+
+  // The buttons on the remote screen change with its state: keep the focus on one of them.
+  const remoteLabels = screen.kind === 'remote' && remote ? remoteItems.map((i) => i.label).join('|') : ''
+  useEffect(() => {
+    if (screen.kind !== 'remote' || !remoteLabels) return
+    if (!panel.current?.contains(document.activeElement) || document.activeElement === panel.current) navButtons()[0]?.focus()
+    // navButtons only reads the DOM.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remoteLabels])
 
   // Focus: the search box when it opens, otherwise the remembered card.
   useEffect(() => {
@@ -316,6 +358,27 @@ export default function TwitchHome({ profile, onProfile, onService }: { profile:
         <button type="button" data-nav className="profile-card" onClick={onService}>
           <strong>Switch service</strong><span className="profile-note">Back to YouTube or Twitch</span></button>
       </div>}
+      {screen.kind === 'remote' && remote && <>
+        <div className="profile-grid">
+          {remoteItems.map((item) => <button type="button" data-nav key={item.action} className="profile-card" onClick={() => void remoteAction(item.action)}>
+            <strong>{item.label}</strong></button>)}
+        </div>
+        <section className="pairing">
+          {remote.svg && <img alt="QR code for pairing a phone with the remote" src={`data:image/svg+xml;utf8,${encodeURIComponent(remote.svg)}`} />}
+          <div className="pairing-text">
+            {!remote.enabled ? <p>The remote is off. Turn it on to control the stream from a phone on this network.</p>
+              : remote.code && !remote.confirmed ? <div className="pairing-confirm" role="alert">
+                <p>A phone connected. Does it show this code?</p>
+                <strong className="pairing-code">{remote.code.slice(0, 3)} {remote.code.slice(3)}</strong>
+              </div>
+              : remote.url ? <>
+                <p>{remote.confirmed ? '✓ Phone paired. Choose New link to pair another.' : 'Scan with your phone (same Wi-Fi). The link works once for 10 minutes.'}</p>
+                <p className="pairing-url">{remote.url}</p>
+              </>
+              : <p>{remote.devices > 0 ? `${remote.devices} phone${remote.devices === 1 ? ' is' : 's are'} paired. Choose Pair a phone to add another.` : 'No phone is paired yet. Choose Pair a phone.'} Use it on a network you trust.</p>}
+          </div>
+        </section>
+      </>}
       {screen.kind === 'search' && <form className="profile-form" onSubmit={(event) => {
         event.preventDefault()
         const text = draft.trim()

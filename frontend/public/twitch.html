@@ -7,6 +7,17 @@
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; color: #fff; font-family: system-ui, sans-serif; }
   /* The page, not the embedded player, keeps keyboard focus so the same keys work as on YouTube. */
   #player iframe { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; pointer-events: none; }
+  /* Chat (T): a read-only pane on the right; the video narrows to make room. */
+  #chat { position: fixed; top: 0; right: 0; width: 25%; height: 100%; border: 0; display: none; pointer-events: none; background: #18181b; }
+  body.chat #chat { display: block; }
+  /* A broadcast has no chat embed: its replay is drawn here, in step with the video. */
+  #chatlog { position: fixed; top: 0; right: 0; width: 25%; height: 100%; box-sizing: border-box; padding: 0.6rem 0.8rem; display: none;
+    flex-direction: column; justify-content: flex-end; overflow: hidden; background: #18181b; font-size: 1.15rem; line-height: 1.35; pointer-events: none; }
+  body.chat #chatlog { display: flex; }
+  #chatlog p { margin: 0 0 0.35rem; overflow-wrap: anywhere; }
+  #chatlog b { font-weight: 700; }
+  #chatlog .none { color: #9a9aa5; }
+  body.chat #player iframe { width: 75%; }
   #osd { position: fixed; left: 2rem; top: 2rem; max-width: 70vw; padding: 0.6rem 1rem; border-radius: 0.5rem;
     background: rgb(0 0 0 / 0.8); font-size: 2rem; white-space: pre-line; opacity: 0; transition: opacity 0.2s; z-index: 3; }
   #osd.on { opacity: 1; }
@@ -18,6 +29,8 @@
 <body tabindex="0">
 <div id="player"></div>
 <div id="wait">Connecting to Twitch…</div>
+<iframe id="chat" title="Twitch chat"></iframe>
+<div id="chatlog"></div>
 <div id="osd"></div>
 <script>
 // Plays one live Twitch channel, past broadcast (VOD) or clip in Twitch's embedded player and
@@ -25,6 +38,7 @@
 // here, and sends back the same commands the phone remote and keyboard use. Live streams have no
 // seeking; broadcasts seek and report their position (the backend saves it for resuming); a clip
 // plays in Twitch's clip embed, which has no scripting API, so it only starts and can be stopped.
+// Chat (T, or the phone's Chat button) shows Twitch's read-only chat embed beside a live stream.
 // Subtitles and the queue do not exist here.
 const params = new URLSearchParams(location.search)
 const channel = /^[A-Za-z0-9_]{1,25}$/.test(params.get('c') || '') ? params.get('c') : ''
@@ -104,7 +118,8 @@ function finish(outcome, extra = {}) {
 function run(command) {
   if (!ready || !Array.isArray(command)) return
   const [name, a, b] = command
-  if (name === 'seek' && typeof a === 'number') {
+  if (name === 'cycle' && a === 'chat') toggleChat()
+  else if (name === 'seek' && typeof a === 'number') {
     if (kind !== 'vod' || !playing) return
     const length = Number(player.getDuration())
     const target = Math.max(0, Number(player.getCurrentTime()) + a)
@@ -132,6 +147,68 @@ function clock(seconds) {
   return h ? `${h}:${m}:${sec}` : `${m}:${sec}`
 }
 
+// Chat replay of a broadcast: the backend hands out Twitch's stored batches (about 60 lines around a
+// moment); the page keeps the ones it has and shows the last lines that happened before the current time.
+let replay = []          // {at, name, color, text}, sorted by `at`
+let replayFrom = 0       // the span of the broadcast the buffer is known to cover: [replayFrom, replayTo)
+let replayTo = 0
+let replayBusy = false
+const SHOWN = 40
+
+async function loadReplay(from) {
+  replayBusy = true
+  try {
+    const res = await fetch(`/api/twitch/chat/${video}?t=${Math.floor(from)}`)
+    if (!res.ok) throw new Error(String(res.status))
+    const batch = await res.json()
+    const lines = batch.items
+    const last = lines.length ? lines[lines.length - 1].at : from
+    if (from < replayFrom || from > replayTo || !replay.length) { replay = []; replayFrom = from }
+    const known = new Set(replay.map((m) => `${m.at}|${m.name}|${m.text}`))
+    for (const m of lines) if (!known.has(`${m.at}|${m.name}|${m.text}`)) replay.push(m)
+    replay.sort((a, b) => a.at - b.at)
+    replayFrom = Math.min(replayFrom, lines.length ? lines[0].at : from)
+    // More chat after this batch: it is known up to its last line; with none, a quiet stretch.
+    replayTo = batch.more ? Math.max(replayTo, last + 1) : Math.max(replayTo, from + 60)
+    if (!lines.length) replayTo = Math.max(replayTo, from + 30)
+  } catch { /* the next tick tries again */ }
+  replayBusy = false
+}
+
+function renderReplay(now) {
+  const box = document.getElementById('chatlog')
+  const lines = replay.filter((m) => m.at <= now).slice(-SHOWN)
+  box.replaceChildren(...(lines.length ? lines.map((m) => {
+    const row = document.createElement('p')
+    const who = document.createElement('b')
+    who.textContent = m.name
+    if (m.color) who.style.color = m.color
+    row.append(who, document.createTextNode(`: ${m.text}`))
+    return row
+  }) : [Object.assign(document.createElement('p'), { className: 'none', textContent: 'No chat yet at this point.' })]))
+}
+
+function tickReplay() {
+  if (kind !== 'vod' || !document.body.classList.contains('chat') || !playing || replayBusy) return
+  const now = Number(player.getCurrentTime())
+  if (!Number.isFinite(now)) return
+  // Fetch when the current moment is outside what the buffer covers (a seek, or the end of the batch).
+  if (now < replayFrom || now >= replayTo) void loadReplay(now)
+  renderReplay(now)
+}
+
+// Chat is read-only and off by default. A live channel gets Twitch's chat embed; a broadcast gets its replay.
+function toggleChat() {
+  if (kind === 'clip') { show('Clips have no chat', 2500); return }
+  const frame = document.getElementById('chat')
+  const on = !document.body.classList.contains('chat')
+  if (kind === 'vod') { document.body.classList.toggle('chat', on); show(on ? 'Chat on' : 'Chat off', 1200); if (on) tickReplay(); return }
+  // The frame is only loaded the first time it is wanted.
+  if (on && !frame.src) frame.src = `https://www.twitch.tv/embed/${encodeURIComponent(channel)}/chat?parent=${encodeURIComponent(location.hostname)}&darkpopout`
+  document.body.classList.toggle('chat', on)
+  show(on ? 'Chat on' : 'Chat off', 1200)
+}
+
 function togglePause() {
   if (player.isPaused()) { player.play(); show('Playing', 1200) }
   else { player.pause(); show('Paused', 1200) }
@@ -141,7 +218,7 @@ document.addEventListener('keydown', (event) => {
   if (event.ctrlKey || event.altKey || event.metaKey) return
   const key = event.key
   const handled = ['Escape', 'q', ' ', 'MediaPlayPause', '9', '0', 'm', 'i',
-    'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'n', 'c'].includes(key)
+    'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'n', 'c', 't'].includes(key)
   if (!handled) return
   event.preventDefault()
   if (key === 'Escape' || key === 'q') finish('quit')
@@ -153,6 +230,7 @@ document.addEventListener('keydown', (event) => {
   else if (key === 'ArrowRight') run(['seek', 10])
   else if (key === 'ArrowUp') run(['seek', 60])
   else if (key === 'ArrowDown') run(['seek', -60])
+  else if (key === 't') toggleChat()
   else if (key === 'i') info(4000)
 })
 
@@ -207,6 +285,7 @@ function start() {
 
 setInterval(() => { if (!finished) void report() }, 500)
 setInterval(() => window.focus(), 2000)
+setInterval(tickReplay, 1000)
 const script = document.createElement('script')
 script.src = 'https://player.twitch.tv/js/embed/v1.js'
 script.onload = start
