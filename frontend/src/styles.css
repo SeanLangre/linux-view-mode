@@ -326,8 +326,8 @@ button:disabled, select:disabled { opacity: 0.5; }
 /* A small build version in the corner of the start and login screens. */
 .build-version { position: fixed; right: 1rem; bottom: 0.5rem; z-index: 5; font-size: 0.7rem; color: var(--muted); opacity: 0.7; pointer-events: none; }
 
-/* First screen: choose YouTube or Twitch. */
-.mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2rem; margin-top: 3rem; max-width: 60rem; }
+/* First screen: choose YouTube, Twitch or Music. */
+.mode-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2rem; margin-top: 3rem; max-width: 90rem; }
 .mode-card { padding: 2.4rem 1.2rem; }
 .mode-card .profile-avatar { width: 7rem; height: 7rem; font-size: 3.5rem; }
 .mode-card strong { font-size: 1.8rem; }
@@ -339,3 +339,59 @@ button:disabled, select:disabled { opacity: 0.5; }
 .tw-six { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .tw-portrait { aspect-ratio: 3 / 4; }
 .tw-portrait img { object-position: top; }
+
+/* Music screens: song rows, the player bar, lyrics and the small dialogs. */
+.music-page { padding-bottom: 14rem; }
+.m-menu { margin-top: 1.2rem; }
+.m-section { margin: 1.6rem 0 0.2rem; font-size: 1.1rem; font-weight: 700; color: var(--muted); }
+.m-lists { margin-top: 0.8rem; }
+.m-actions { margin: 0.8rem 0; align-items: center; }
+.m-count { color: var(--muted); }
+.m-list { display: grid; gap: 0.3rem; margin: 0.8rem 0; }
+.m-row { display: grid; grid-template-columns: 2.2rem 5.5rem minmax(0, 1fr) 9rem 1.5rem 4rem; align-items: center; gap: 1rem; width: 100%; padding: 0.4rem 0.8rem; text-align: left; background: var(--surface); }
+.m-row:focus { outline: 0.2rem solid var(--focus); background: var(--surface-2); }
+.m-row.playing { border-color: var(--music, #53a888); }
+.m-row.playing .m-index { color: #53a888; }
+.m-index { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.m-art { width: 5.5rem; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 0.3rem; background: var(--surface-2); }
+.m-title { display: grid; min-width: 0; }
+.m-title strong, .m-title span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.m-title span { color: var(--muted); font-size: 0.85rem; }
+.m-state { font-size: 0.8rem; color: var(--muted); text-align: right; }
+.m-state.offline { color: #53a888; }
+.m-state.downloading { color: #cb9a53; }
+.m-state.failed { color: #ff8f8f; }
+.m-fav { color: #dc7474; }
+.m-dur { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+
+.m-bar { position: fixed; left: var(--gutter); right: var(--gutter); bottom: 3.2rem; z-index: 20; display: grid; grid-template-columns: 4.5rem minmax(0, 1.4fr) minmax(0, 1.6fr) auto; align-items: center; gap: 1rem; padding: 0.6rem 1rem; border-radius: 0.8rem; background: var(--surface-2); box-shadow: 0 0.4rem 1.6rem rgba(0, 0, 0, 0.5); }
+.m-bar-art { width: 4.5rem; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 0.3rem; }
+.m-bar-text { display: grid; min-width: 0; }
+.m-bar-text strong, .m-bar-text span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.m-bar-text span { color: var(--muted); font-size: 0.85rem; }
+.m-bar-progress { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 0.7rem; color: var(--muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.m-bar-line { height: 0.35rem; border-radius: 0.2rem; background: var(--surface); overflow: hidden; }
+.m-bar-line > div { height: 100%; background: #53a888; }
+.m-bar-state { display: flex; gap: 0.9rem; font-size: 0.95rem; }
+.m-bar-state .off { color: var(--muted); opacity: 0.5; }
+.m-bar-state .on { color: #53a888; }
+.m-bar-next { grid-column: 2 / -1; color: var(--muted); font-size: 0.8rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.m-bar-error { grid-column: 1 / -1; color: #ff8f8f; }
+.m-note { position: fixed; top: 4vh; right: var(--gutter); z-index: 30; max-width: 32rem; margin: 0; padding: 0.8rem 1.2rem; border-left: 0.3rem solid #53a888; border-radius: 0.7rem; background: var(--surface-2); color: var(--text); font-size: 0.95rem; }
+
+.m-now { display: flex; align-items: center; gap: 1.5rem; margin: 0.5rem 0 1rem; }
+.m-now img { width: 14rem; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 0.6rem; }
+.m-now h2 { margin: 0; font-size: 1.6rem; }
+.m-now p { margin: 0.3rem 0 0; color: var(--muted); }
+.m-lyrics { display: grid; justify-items: start; gap: 0.2rem; max-height: 50vh; overflow-y: auto; padding: 0.5rem 0; }
+.m-lyric { padding: 0.35rem 0.8rem; font-size: 1.4rem; color: var(--muted); background: none; text-align: left; }
+.m-lyric.current { color: var(--text); font-weight: 700; font-size: 1.7rem; }
+.m-lyric:focus { outline: 0.18rem solid var(--focus); background: var(--surface-2); }
+.m-plain { margin: 0; font: inherit; font-size: 1.3rem; line-height: 1.6; color: var(--text); white-space: pre-wrap; }
+
+.m-overlay { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(0, 0, 0, 0.7); }
+.m-dialog { width: min(40rem, 90vw); max-height: 80vh; overflow-y: auto; padding: 1.5rem 1.8rem; border-radius: 1rem; background: var(--surface); }
+.m-dialog h2 { margin: 0 0 1rem; font-size: 1.3rem; }
+.m-picks { display: grid; gap: 0.5rem; }
+.m-picks button, .m-dialog form button { text-align: left; background: var(--surface-2); }
+.m-picks button:focus, .m-dialog form button:focus { outline: 0.2rem solid var(--focus); }

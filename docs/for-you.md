@@ -2,7 +2,7 @@
 
 A new Home button opens a "For You" screen: a recommendation list built by CouchTube itself, not by YouTube's algorithm. The user seeds it with themes, videos and channels, and CouchTube discovers new videos from those seeds.
 
-Status: implemented 2026-11-01 (build order below), not yet tried with real use. The algorithm is intentionally simple and will be tuned over time. [`README.md`](../README.md#for-you) has the user-facing description; this file keeps the decisions.
+Status: implemented 2026-11-01 (build order below), not yet tried with real use. The algorithm is intentionally simple and will be tuned over time. [`README-youtube.md`](README-youtube.md#for-you) has the user-facing description; this file keeps the decisions.
 
 ## Concept
 

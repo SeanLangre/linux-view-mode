@@ -101,6 +101,39 @@ impl Database {
                 PRIMARY KEY(profile_id, video_id)
             );
             INSERT OR IGNORE INTO twitch_profiles(id, name, color) VALUES ('guest', 'Guest', '#707887');
+            CREATE TABLE IF NOT EXISTS music_profiles (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL,
+                created_at INTEGER NOT NULL DEFAULT (unixepoch())
+            );
+            CREATE TABLE IF NOT EXISTS music_tracks (
+                video_id TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT, duration_secs INTEGER,
+                thumbnail_url TEXT, file_path TEXT, downloaded_at INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS music_playlists (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile_id TEXT NOT NULL REFERENCES music_profiles(id) ON DELETE CASCADE,
+                name TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch())
+            );
+            CREATE TABLE IF NOT EXISTS music_playlist_tracks (
+                playlist_id INTEGER NOT NULL REFERENCES music_playlists(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL, video_id TEXT NOT NULL REFERENCES music_tracks(video_id),
+                PRIMARY KEY(playlist_id, position)
+            );
+            CREATE TABLE IF NOT EXISTS music_favorites (
+                profile_id TEXT NOT NULL REFERENCES music_profiles(id) ON DELETE CASCADE,
+                video_id TEXT NOT NULL REFERENCES music_tracks(video_id),
+                added_at INTEGER NOT NULL DEFAULT (unixepoch()), PRIMARY KEY(profile_id, video_id)
+            );
+            CREATE TABLE IF NOT EXISTS music_history (
+                profile_id TEXT NOT NULL REFERENCES music_profiles(id) ON DELETE CASCADE,
+                video_id TEXT NOT NULL REFERENCES music_tracks(video_id),
+                played_at INTEGER NOT NULL DEFAULT (unixepoch()), PRIMARY KEY(profile_id, video_id)
+            );
+            CREATE TABLE IF NOT EXISTS music_lyrics (
+                video_id TEXT PRIMARY KEY, synced TEXT, plain TEXT, fetched_at INTEGER NOT NULL
+            );
+            INSERT OR IGNORE INTO music_profiles(id, name, color) VALUES ('guest', 'Guest', '#707887');
+            INSERT OR IGNORE INTO settings(key, value) VALUES ('music_active_profile', 'guest');
             INSERT OR IGNORE INTO settings(key, value) VALUES ('twitch_active_profile', 'guest');
             INSERT OR IGNORE INTO profiles(id, name, color) VALUES ('guest', 'Guest', '#707887');
             INSERT OR IGNORE INTO settings(key, value) VALUES ('active_profile', 'guest');",
@@ -135,7 +168,7 @@ impl Database {
         Ok(Self(Arc::new(Mutex::new(connection))))
     }
 
-    async fn with<T, F>(&self, operation: F) -> Result<T>
+    pub(crate) async fn with<T, F>(&self, operation: F) -> Result<T>
     where
         T: Send + 'static,
         F: FnOnce(&mut Connection) -> Result<T> + Send + 'static,
@@ -298,7 +331,7 @@ impl Database {
         .await
     }
 
-    /// The service the user chose last (`youtube` or `twitch`); `None` before the first choice.
+    /// The service the user chose last (`youtube`, `twitch` or `music`); `None` before the first choice.
     pub async fn mode(&self) -> Result<Option<String>> {
         self.with(|db| {
             Ok(db.query_row("SELECT value FROM settings WHERE key = 'mode'", [], |r| r.get(0)).optional()?)

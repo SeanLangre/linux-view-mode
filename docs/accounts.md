@@ -1,6 +1,6 @@
 # Accounts and sign-in
 
-How profiles, Google sign-in and feeds work. The user-facing steps are in the [README](../README.md#profiles-and-sign-in); the encryption design is in [`phone-signin-encryption.md`](phone-signin-encryption.md).
+How profiles, Google sign-in and feeds work. The user-facing steps are in the [YouTube README](README-youtube.md#profiles-and-sign-in); the encryption design is in [`phone-signin-encryption.md`](phone-signin-encryption.md).
 
 ## Profiles
 - Each profile = `{id, name, color}` plus a fixed **Guest** profile (signed out).

@@ -14,7 +14,7 @@ Each phase ends with something you can test. The open checklist is [`TODO.md`](.
 | Playback in the CouchTube window | Implemented 2026-11-01 (timeline, subtitles, remote commands, mpv fallback); user test positive |
 | 6 — Deploy | Written (`deploy/`, exit to desktop), see [`server.md`](server.md) |
 | 7 — Polish | Implemented 2026-10-25; real-hardware checks in `TODO.md` |
-| Twitch mode | Steps 1-4 of 7 implemented (mode choice, Twitch profiles, browsing and watching on the unofficial web API, Twitch sign-in with Following via Firefox like YouTube; step 4 not yet tried with a real login); VODs, chat and the rest planned (separate Twitch profiles, start screen chooses the service), design in [`twitch-mode.md`](twitch-mode.md) |
+| Twitch mode | Steps 1-4 of 7 implemented (mode choice, Twitch profiles, browsing and watching on the unofficial web API, Twitch sign-in with Following via Firefox like YouTube; step 4 not yet tried with a real login); VODs, chat and the rest planned (separate Twitch profiles, start screen chooses the service), design in [`README-twitch.md`](README-twitch.md) |
 
 Phases 1–5 ran on the dev machine, so they didn't wait for the server's Arch install. Server setup and Phase 0 ([`server.md`](server.md)) can happen whenever you're ready.
 

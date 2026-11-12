@@ -124,7 +124,7 @@ Results are cached per profile for a short time (live data about 1 minute, categ
 
 - New **mode choice** screen first (see above), then the Twitch profile picker, then the Twitch home (Following, Top categories). `p` switches Twitch profile as it does on YouTube. One app with a mode flag, not two apps.
 - Cards show channel name, title, category, viewer count and a red **LIVE** badge; VOD cards reuse the Resume badge.
-- New keys only where needed: `t` chat on and off while watching. Everything else reuses the keys in the [README](../README.md#keys).
+- New keys only where needed: `t` chat on and off while watching. Everything else reuses the keys in the [YouTube README](README-youtube.md#keys).
 
 ## Security and limits
 
@@ -155,3 +155,24 @@ Results are cached per profile for a short time (live data about 1 minute, categ
 - **`parent` on a bare IP:** answered 2026-11-08, Twitch accepts `127.0.0.1` and `localhost`; nothing to do.
 - **Auto-start in the last mode:** the mode choice always shows first for now. A setting to skip it could come later.
 - **Mode choice and the remembered mode:** the choice screen highlights the last used service but always shows. Esc on a YouTube or Twitch profile list returns to it.
+
+## Using it today
+
+Twitch mode is being built (see the sections above): so far you can browse top live streams, categories and channel search, with no Twitch account or registration needed (it uses Twitch's unofficial web API); you can sign a Twitch profile in (**S** on the profile list; Firefox on Twitch's login page, with the phone keyboard) so **Following** lists the channels you follow, and you can also **watch a live channel**: Enter on a stream opens Twitch's player in the CouchTube window (**Space** pause, **9**/**0** volume, **M** mute, **Esc** stop). You can also open a channel (search, or **C** on a stream card) to watch its past broadcasts (they resume where you stopped) and top clips (**T** switches), and press **T** while watching a live stream for a read-only chat pane. The phone remote works on the Twitch side too (pause, volume, mute, chat, stop, and a channel name or twitch.tv link to watch).
+
+## API
+
+| Method | Path | Returns |
+|---|---|---|
+| GET/POST | `/api/twitch/profiles` | Twitch profiles `{profiles: [{id, name, color}], active_id}` (a list separate from `/api/profiles`, with its own Guest); POST `{name, color?}` creates one |
+| DELETE | `/api/twitch/profiles/<id>` | Removes a Twitch profile (Guest can't be removed); the active one falls back to Guest |
+| POST | `/api/twitch/profiles/<id>/select` | Selects the active Twitch profile and stops playback |
+| POST | `/api/twitch/play` | Body `{login}`, `{video, start?}` (a past broadcast, resumed from the active Twitch profile's saved position unless `start`) or `{clip}`; starts it in the CouchTube window (`/api/status` then shows `page: /twitch.html?…`, `id: twitch:<login>`); an offline channel or other failure appears as `error` there |
+| POST | `/api/twitch/profiles/<id>/signin` | Opens Firefox on Twitch's login page in that profile's own folder (phone keyboard as for YouTube); closes itself once the login cookie appears |
+| GET | `/api/twitch/profiles/<id>/status` | `{state, message}` like YouTube's; `?check=true` asks Twitch who the saved login belongs to |
+| GET | `/api/twitch/channel/<login>` | `?kind=vods` (default) or `clips`, with `cursor`/`refresh`: `{login, name, live, items, cursor}`, the live stream (or `null`) plus past broadcasts or top clips; broadcasts carry the active profile's `resume_position`/`completed`; 404 for an unknown channel |
+| GET | `/api/twitch/following` | Live channels the active Twitch profile follows `{items, cursor: null}`; 409 for Guest, an unsigned profile or a rejected login |
+| GET | `/api/twitch/status` | `{source}`: `unofficial` (default) or `official` (both Twitch credentials set) |
+| GET | `/api/twitch/categories`, `/streams`, `/search` | Twitch pages `{items, cursor}`: top categories; live streams (`?game_id=` for one category); channel search (`?q=`). All take `cursor` and `refresh=true`; with the unofficial source a cursor is the next page size (`n48`) |
+
+The mode choice (`/api/mode`), the player status (`/api/status`) and the phone remote are shared with the other modes; see the main [README](../README.md#api).

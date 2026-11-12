@@ -39,19 +39,19 @@ Everything below was built on 2026-11-08/09 and is **uncommitted**. Suggested co
 - [ ] **W** marks a video watched (badge appears, it leaves For You) and clears it again; the **History** button opens CouchTube's own history
 - [ ] Tune scoring (weights in `src/discover.rs`) after a week of real use
 
-## Twitch mode, step 1 (implemented 2026-11-08, see [`docs/twitch-mode.md`](docs/twitch-mode.md); endpoints tried with curl, not seen on screen)
+## Twitch mode, step 1 (implemented 2026-11-08, see [`docs/README-twitch.md`](docs/README-twitch.md); endpoints tried with curl, not seen on screen)
 
 - [ ] First screen shows **YouTube** and **Twitch**; the last used one is highlighted and Enter picks it; ← → move
 - [ ] YouTube: the profile screen and Home work as before; Esc on the profile list and Home → **Switch service** return to the choice
 - [ ] Twitch: add a profile, pick it, switch profile, remove it with **D** (Guest can't be removed); YouTube profiles are not affected
 - [ ] Restart the backend: the last mode and each service's active profile are remembered
 
-## Twitch mode, step 2 (implemented 2026-11-08, see [`docs/twitch-mode.md`](docs/twitch-mode.md); checked against the real Twitch from a headless browser, not yet on the TV)
+## Twitch mode, step 2 (implemented 2026-11-08, see [`docs/README-twitch.md`](docs/README-twitch.md); checked against the real Twitch from a headless browser, not yet on the TV)
 
 - [ ] On the TV: Top live streams, Categories (6 per row), a category's streams and Search load with real pictures; Load more works; `u` refreshes; Esc returns with the focus on the card you left
 - [ ] Watch for the unofficial source breaking (it is not a supported API): if the screens show "could not reach Twitch", read the backend log; the client id repairs itself, but a schema or integrity-check change needs `src/gql.rs` updated
 
-## Twitch mode, step 3: watching (implemented 2026-11-08, see [`docs/twitch-mode.md`](docs/twitch-mode.md); played in Firefox 159 against the real Twitch, not yet on the TV)
+## Twitch mode, step 3: watching (implemented 2026-11-08, see [`docs/README-twitch.md`](docs/README-twitch.md); played in Firefox 159 against the real Twitch, not yet on the TV)
 
 - [ ] Enter on a live stream: the Twitch player covers the kiosk window and starts by itself, with sound (the kiosk profile's autoplay settings apply; restart the kiosk once after updating so they do)
 - [ ] **Ads with uBlock Origin:** watch a channel as a non-subscriber for a few minutes: are ads blocked, or does the player show a blank/black screen? This decides whether step 7 (streamlink) is needed
@@ -61,7 +61,7 @@ Everything below was built on 2026-11-08/09 and is **uncommitted**. Suggested co
 - [ ] Leaving Twitch (Esc to the profile list, **Switch service**) while a stream plays stops it
 - [ ] Playback quality and CPU on the RN96 (Twitch picks the quality; check 1080p60 is smooth)
 
-## Twitch mode, step 4: sign-in and Following (implemented 2026-11-08, see [`docs/twitch-mode.md`](docs/twitch-mode.md); tested against fakes only, **never with a real Twitch login**)
+## Twitch mode, step 4: sign-in and Following (implemented 2026-11-08, see [`docs/README-twitch.md`](docs/README-twitch.md); tested against fakes only, **never with a real Twitch login**)
 
 - [ ] Twitch → profile list → **Add profile** → name → the sign-in screen: Open Firefox sign-in opens Twitch's login page; after you log in the window closes by itself within a few seconds and the screen says "Signed in to Twitch as <you>". If the window never closes, the cookie is not called `auth-token` (check with `sqlite3` on a copy of `~/.local/share/couchtube/twitch/<id>/firefox/cookies.sqlite`)
 - [ ] **Phone keyboard on Twitch:** scan the QR code, check the phone says "Twitch" and the codes match, press Yes. Step 1 types the username and presses **Tab**, step 2 types the password and presses Enter (Twitch's form has both fields on one page). If the first step submits or lands in the wrong field, change `Flow::submit_key` in `src/pairing.rs`

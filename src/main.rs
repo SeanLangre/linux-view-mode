@@ -5,6 +5,13 @@ mod discover;
 mod feeds;
 mod gql;
 mod helix;
+mod lyrics;
+mod music;
+mod music_cache;
+mod music_db;
+mod music_player;
+mod music_queue;
+mod music_yt;
 mod pairing;
 mod playback;
 mod player;
@@ -90,6 +97,7 @@ async fn main() -> Result<()> {
     };
     let pairing = pairing::Pairing::new(pair_port);
     let thumbs_dir = data_dir.join("thumbs");
+    let music_dir = data_dir.clone();
     let profiles = profiles::Profiles::open(data_dir, pairing.clone())?;
     let thumbs = thumbs::Thumbs::new(thumbs_dir, profiles.db.clone())?;
     let playback = playback::Playback::new(player.clone(), profiles.db.clone());
@@ -98,7 +106,9 @@ async fn main() -> Result<()> {
         Err(_) => DEFAULT_REMOTE_PORT,
     };
     let remote = remote::Remote::new(profiles.db.clone(), remote_port);
+    let music = music::Music::new(profiles.db.clone(), &music_dir).await?;
     let state = api::AppState {
+        music: music.clone(),
         remote: remote.clone(),
         playback: playback.clone(),
         feeds: feeds::Feeds::new(profiles.db.clone(), thumbs.clone()),
@@ -117,6 +127,14 @@ async fn main() -> Result<()> {
             if let Err(err) = tracked.playback.tick().await {
                 tracing::error!("playback tracking failed: {err:#}");
             }
+        }
+    });
+    let music_ticker = music.clone();
+    let music_monitor = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+        loop {
+            interval.tick().await;
+            music_ticker.tick().await;
         }
     });
     let app = Router::new()
@@ -145,6 +163,8 @@ async fn main() -> Result<()> {
         })
         .await;
     monitor.abort();
+    music_monitor.abort();
+    music.stop().await;
     pairing.end().await;
     remote.end().await;
     playback.stop().await?;

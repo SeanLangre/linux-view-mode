@@ -1,4 +1,4 @@
-//! Twitch mode (see `docs/twitch-mode.md`): the saved mode, the separate Twitch profiles and
+//! Twitch mode (see `docs/README-twitch.md`): the saved mode, the separate Twitch profiles and
 //! browsing. Twitch profiles are their own list: they share no ids, caches or settings with the
 //! YouTube profiles, so removing one never touches the other.
 use axum::{
@@ -71,7 +71,7 @@ impl Source {
     }
 }
 
-pub const MODES: [&str; 2] = ["youtube", "twitch"];
+pub const MODES: [&str; 3] = ["youtube", "twitch", "music"];
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -292,17 +292,19 @@ struct ModeRequest {
     mode: String,
 }
 
-/// Choosing a service stops whatever is playing: the two services use different player pages.
+/// Choosing a service stops whatever is playing: the services use different players.
 async fn set_mode(
     State(state): State<AppState>,
     body: Result<Json<ModeRequest>, JsonRejection>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let Json(request) = body.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "expected {mode} JSON"))?;
     if !MODES.contains(&request.mode.as_str()) {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "mode must be youtube or twitch"));
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "mode must be youtube, twitch or music"));
     }
     let _transition = state.transition.lock().await;
     state.playback.stop().await.map_err(internal)?;
+    // Switching service stops the music too, whichever service is chosen.
+    state.music.stop().await;
     state.profiles.db.set_mode(&request.mode).await.map_err(internal)?;
     Ok(Json(json!({ "mode": request.mode })))
 }

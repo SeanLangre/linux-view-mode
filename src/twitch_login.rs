@@ -1,4 +1,4 @@
-//! Twitch sign-in, the same way as YouTube's (see `docs/twitch-mode.md`, step 4): each Twitch
+//! Twitch sign-in, the same way as YouTube's (see `docs/README-twitch.md`, step 4): each Twitch
 //! profile has its own Firefox folder, a sign-in window opens on twitch.tv, the phone can type into
 //! it, and once the login cookie appears the window closes itself. The login is Twitch's
 //! `auth-token` cookie; the backend reads it from a copy of `cookies.sqlite` when it needs it and

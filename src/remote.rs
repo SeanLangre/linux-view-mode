@@ -269,11 +269,14 @@ async fn state(State(lan): State<Lan>, headers: HeaderMap) -> Response {
     if !lan.remote.authorized(&headers).await {
         return failure(StatusCode::UNAUTHORIZED, "pair this phone again");
     }
+    let db = &lan.app.profiles.db;
+    if db.mode().await.ok().flatten().as_deref() == Some("music") {
+        return music_state(&lan).await;
+    }
     let status = match lan.app.playback.player.status().await {
         Ok(status) => status,
         Err(_) => return failure(StatusCode::INTERNAL_SERVER_ERROR, "could not read playback"),
     };
-    let db = &lan.app.profiles.db;
     let twitch = db.mode().await.ok().flatten().as_deref() == Some("twitch");
     let (profile, queue) = {
         let _transition = lan.app.transition.lock().await;
@@ -298,6 +301,80 @@ async fn state(State(lan): State<Lan>, headers: HeaderMap) -> Response {
         "queue": queue.iter().map(|v| json!({"id": v.id, "title": v.title})).collect::<Vec<_>>(),
     }))
     .into_response()
+}
+
+/// Music mode's state in the shape the phone page already reads (`status`, `queue`), plus a `music`
+/// block with the player's settings. `queue` is what plays after the current song.
+async fn music_state(lan: &Lan) -> Response {
+    let music = &lan.app.music;
+    let Ok(profile) = lan.app.profiles.db.music_active().await else {
+        return failure(StatusCode::INTERNAL_SERVER_ERROR, "could not read the profile");
+    };
+    let snapshot = music.player.snapshot().await;
+    let upcoming = music.player.upcoming().await;
+    let title = snapshot.current.as_ref().map(|t| match &t.artist {
+        Some(artist) => format!("{} · {artist}", t.title),
+        None => t.title.clone(),
+    });
+    Json(json!({
+        "status": {
+            "playing": snapshot.current.is_some(),
+            "id": snapshot.current.as_ref().map(|t| t.video_id.clone()),
+            "title": title,
+            "position": snapshot.position,
+            "duration": snapshot.duration,
+            "paused": snapshot.paused,
+            "loading": snapshot.current.is_some() && !snapshot.loaded,
+            "error": snapshot.error,
+        },
+        "mode": "music",
+        "profile": profile.name,
+        "music": {
+            "shuffle": snapshot.shuffle,
+            "repeat": crate::music_player::repeat_name(snapshot.repeat),
+            "volume": snapshot.volume,
+            "muted": snapshot.muted,
+        },
+        "queue": upcoming.iter().skip(1).map(|t| json!({"id": t.video_id, "title": t.title})).collect::<Vec<_>>(),
+    }))
+    .into_response()
+}
+
+/// A command from the phone in Music mode. `play` and `enqueue` take a song name or YouTube link;
+/// `jump` plays a song in the queue (its place ahead); the queue itself cannot be edited.
+async fn music_command(lan: &Lan, body: Command, number: Option<f64>) -> Response {
+    let music = &lan.app.music;
+    let text = body.value.as_ref().and_then(Value::as_str);
+    let result = match body.cmd.as_str() {
+        "pause" => music.control("toggle", None, None).await,
+        "mute" | "next" | "prev" | "stop" | "shuffle" | "repeat" => music.control(&body.cmd, None, None).await,
+        "seek" | "jump" => music.control(&body.cmd, number, None).await,
+        "volume" => music.control("volume_by", number, None).await,
+        "play" | "enqueue" => {
+            let Some(text) = text else { return failure(StatusCode::BAD_REQUEST, "type a song name or paste a YouTube link") };
+            let track = match music.song_from_text(text).await {
+                Ok(track) => track,
+                Err(err) => return err.into_response(),
+            };
+            let _transition = lan.app.transition.lock().await;
+            let playing = music.player.current_id().await.is_some();
+            if body.cmd == "enqueue" && playing {
+                music.enqueue(track).await;
+                Ok(())
+            } else if let Err(err) = lan.app.playback.stop().await {
+                tracing::error!("remote command {} failed: {err:#}", body.cmd);
+                return failure(StatusCode::BAD_GATEWAY, "the TV could not do that");
+            } else {
+                music.start(vec![track], 0, None).await
+            }
+        }
+        "dequeue" | "clear" => return failure(StatusCode::BAD_REQUEST, "the queue cannot be edited from the phone"),
+        _ => return failure(StatusCode::BAD_REQUEST, "unknown command"),
+    };
+    match result {
+        Ok(()) => Json(json!({"ok": true})).into_response(),
+        Err(err) => err.into_response(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -356,6 +433,9 @@ async fn command(State(lan): State<Lan>, headers: HeaderMap, Json(body): Json<Co
         return failure(StatusCode::UNAUTHORIZED, "pair this phone again");
     }
     let number = body.value.as_ref().and_then(Value::as_f64).filter(|v| v.is_finite());
+    if lan.app.profiles.db.mode().await.ok().flatten().as_deref() == Some("music") {
+        return music_command(&lan, body, number).await;
+    }
     let player = &lan.app.playback.player;
     let mpv = match body.cmd.as_str() {
         "pause" => Some(vec![json!("cycle"), json!("pause")]),

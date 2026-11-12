@@ -24,6 +24,7 @@ pub struct AppState {
     pub profiles: Profiles,
     pub remote: crate::remote::Remote,
     pub twitch: crate::twitch::Source,
+    pub music: crate::music::Music,
     pub thumbs: crate::thumbs::Thumbs,
     pub transition: Arc<Mutex<()>>,
 }
@@ -72,6 +73,7 @@ pub fn router(state: AppState) -> Router {
         .route("/thumb/{id}", get(thumb))
         .route("/version", get(version))
         .merge(crate::twitch::routes())
+        .merge(crate::music::routes())
         // Without this, unknown /api paths would fall through to the frontend's index.html.
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "no such endpoint") })
         .with_state(state)
@@ -204,12 +206,12 @@ async fn channel(
 /// An error sent to the frontend as `{"error": "..."}`.
 pub struct ApiError {
     status: StatusCode,
-    message: &'static str,
+    message: std::borrow::Cow<'static, str>,
 }
 
 impl ApiError {
-    pub(crate) fn new(status: StatusCode, message: &'static str) -> Self {
-        Self { status, message }
+    pub(crate) fn new(status: StatusCode, message: impl Into<std::borrow::Cow<'static, str>>) -> Self {
+        Self { status, message: message.into() }
     }
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clamp, move, START, type RowSpec } from './nav'
+import { clamp, move, spatial, START, type Box, type RowSpec } from './nav'
 
 const carousel = (length: number): RowSpec => ({ length, remember: true })
 const grid = (length: number): RowSpec => ({ length, remember: false })
@@ -61,5 +61,39 @@ describe('clamp', () => {
   it('handles screens with nothing to focus', () => {
     expect(clamp({ ...START, row: 2, col: 2 }, [])).toMatchObject({ row: 0, col: 0 })
     expect(clamp(START, [grid(0)])).toMatchObject({ row: 0, col: 0 })
+  })
+})
+
+describe('spatial', () => {
+  const box = (col: number, row: number, width = 100): Box => ({ left: col * 120, top: row * 60, width, height: 50 })
+
+  it('moves along a grid and stays put at the edges', () => {
+    const boxes = [box(0, 0), box(1, 0), box(0, 1), box(1, 1)]
+    expect(spatial(boxes, 0, 'right')).toBe(1)
+    expect(spatial(boxes, 0, 'down')).toBe(2)
+    expect(spatial(boxes, 3, 'left')).toBe(2)
+    expect(spatial(boxes, 3, 'up')).toBe(1)
+    expect(spatial(boxes, 0, 'left')).toBe(0)
+    expect(spatial(boxes, 0, 'up')).toBe(0)
+    expect(spatial(boxes, 3, 'right')).toBe(3)
+  })
+
+  it('goes down a list of full-width rows and from a short row to the list below', () => {
+    const list = [box(0, 0, 300), box(0, 1, 300), box(0, 2, 300)]
+    expect(spatial(list, 0, 'down')).toBe(1)
+    expect(spatial(list, 2, 'up')).toBe(1)
+    const mixed = [box(0, 0), box(1, 0), box(2, 0), box(0, 1, 360)]
+    expect(spatial(mixed, 2, 'down')).toBe(3)
+    expect(spatial(mixed, 3, 'up')).toBe(1) // the one nearest the middle of the wide row
+  })
+
+  it('prefers the button lined up over a nearer one off to the side', () => {
+    const boxes = [box(1, 0), box(0, 1), box(1, 3)]
+    expect(spatial(boxes, 0, 'down')).toBe(2)
+  })
+
+  it('handles empty and unknown positions', () => {
+    expect(spatial([], 0, 'down')).toBe(-1)
+    expect(spatial([box(0, 0)], -1, 'down')).toBe(0)
   })
 })

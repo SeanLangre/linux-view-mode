@@ -69,7 +69,7 @@ build.rs          embeds the git commit as `COUCHTUBE_COMMIT` (served by `/api/v
   discover.rs     For You discovery and ranking
   remote.rs       phone remote (port 7880, off until switched on) and remote.html
   cec.rs          HDMI-CEC TV power
-  twitch.rs       Twitch mode routes: saved mode, Twitch profiles, browsing (see [`twitch-mode.md`](twitch-mode.md))
+  twitch.rs       Twitch mode routes: saved mode, Twitch profiles, browsing (see [`README-twitch.md`](README-twitch.md))
   gql.rs          Twitch's unofficial web API client (the default source, no registration)
   helix.rs        official Twitch Helix client (used once a Twitch application is registered)
   twitch_login.rs Twitch sign-in (Firefox folder, login cookie, check); a child module of profiles.rs
@@ -102,7 +102,7 @@ tests/            smoke tests (profiles, feeds, Twitch) with fake tools, Sponsor
 React 19 + TypeScript + Vite 8, tested with vitest, linted with oxlint. No UI library: the app is one screen stack and a row/column focus model.
 
 ### API
-The full, current API table is in the [README](../README.md#api).
+The shared API table is in the [README](../README.md#api); each mode's endpoints are in its own README: [YouTube](README-youtube.md#api), [Twitch](README-twitch.md#api) and [Music](README-music.md#http-api).
 
 ### Data (SQLite, `~/.local/share/couchtube/couchtube.db`)
 - `profiles(id, name, color, created_at)` and `settings(key, value)` store profiles and active selection
@@ -126,4 +126,4 @@ The full, current API table is in the [README](../README.md#api).
 
 ## Keys
 
-The keyboard map (UI and playback) is in the [README](../README.md#keys). Legacy mpv bindings live in `config/mpv/input.conf`; the embedded player page (`watch.html`) accepts the same keys, plus `c` for subtitles.
+The keyboard map (UI and playback) is in the [YouTube README](README-youtube.md#keys). Legacy mpv bindings live in `config/mpv/input.conf`; the embedded player page (`watch.html`) accepts the same keys, plus `c` for subtitles.

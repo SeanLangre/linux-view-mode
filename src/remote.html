@@ -48,19 +48,22 @@
     <button data-cmd="volume" data-value="5">🔊 +</button>
     <button data-cmd="subtitles" data-for="youtube">CC</button>
     <button data-cmd="chat" data-for="twitch">💬 Chat</button>
+    <button data-cmd="prev" data-for="music">⏮ Back</button>
+    <button data-cmd="shuffle" data-for="music" id="shuffle">⇄ Shuffle</button>
+    <button data-cmd="repeat" data-for="music" id="repeat">↻ Repeat</button>
     <button data-cmd="stop" class="wide">⏹ Stop</button>
   </div>
   <form id="add">
     <input id="link" type="text" inputmode="url" placeholder="Paste a YouTube link" autocomplete="off" autocapitalize="off" spellcheck="false">
     <div class="grid">
       <button type="submit" data-cmd="play" class="wide">Play now</button>
-      <button type="submit" data-cmd="enqueue" data-for="youtube" class="wide">Add to queue</button>
+      <button type="submit" data-cmd="enqueue" data-for="youtube music" class="wide">Add to queue</button>
     </div>
   </form>
-  <div data-for="youtube">
-    <h2>Queue</h2>
+  <div data-for="youtube music">
+    <h2 id="queue-title">Queue</h2>
     <ul id="queue"></ul>
-    <button data-cmd="clear">Clear queue</button>
+    <button data-cmd="clear" data-for="youtube">Clear queue</button>
   </div>
 </section>
 
@@ -103,29 +106,41 @@
     const res = await fetch('/state', { headers: { Authorization: `Bearer ${device}` }, cache: 'no-store' })
     if (res.status === 401) { set(KEY, null); show('nopair'); say('This phone was forgotten on the TV.'); return false }
     if (!res.ok) { say('The TV did not answer.'); return true }
-    const { status, mode, profile, queue } = await res.json()
-    say('')
+    const { status, mode, profile, queue, music } = await res.json()
+    say(status.error || '')
     // The Twitch side has chat instead of subtitles, no queue and no "next"; "play" takes a channel.
+    // The Music side has back, shuffle and repeat, a read-only queue, and takes a song name or link.
     const twitch = mode === 'twitch'
-    for (const el of document.querySelectorAll('[data-for]')) el.hidden = el.dataset.for !== mode
+    const listening = mode === 'music'
+    for (const el of document.querySelectorAll('[data-for]')) el.hidden = !el.dataset.for.split(' ').includes(mode)
     document.querySelector('button[data-cmd="next"]').disabled = twitch
-    $('link').placeholder = twitch ? 'Channel name or twitch.tv link' : 'Paste a YouTube link'
+    $('link').placeholder = twitch ? 'Channel name or twitch.tv link' : listening ? 'Song name or YouTube link' : 'Paste a YouTube link'
     document.querySelector('#add button[data-cmd="play"]').textContent = twitch ? 'Watch now' : 'Play now'
-    $('who').textContent = `Watching as ${profile}`
-    $('title').textContent = status.playing ? (status.title || 'Loading…') : 'Nothing playing'
-    $('time').textContent = status.playing && status.duration ? `${status.paused ? '⏸ ' : ''}${clock(status.position)} / ${clock(status.duration)}` : ''
+    $('who').textContent = `${listening ? 'Listening' : 'Watching'} as ${profile}`
+    $('title').textContent = status.playing ? (status.title || 'Loading…') + (status.loading ? ' (loading…)' : '') : 'Nothing playing'
+    $('time').textContent = status.playing && status.duration
+      ? `${status.paused ? '⏸ ' : ''}${clock(status.position)} / ${clock(status.duration)}${music ? ` · 🔊 ${Math.round(music.volume)}${music.muted ? ' (muted)' : ''}` : ''}` : ''
+    if (music) {
+      $('shuffle').textContent = `⇄ Shuffle ${music.shuffle ? 'on' : 'off'}`
+      $('repeat').textContent = `↻ Repeat ${music.repeat}`
+      $('queue-title').textContent = 'Up next'
+    }
     const list = $('queue')
-    list.replaceChildren(...queue.map((v) => {
+    list.replaceChildren(...queue.map((v, index) => {
       const li = document.createElement('li')
       const name = document.createElement('span')
       name.textContent = v.title || v.id
       const play = document.createElement('button')
       play.textContent = '▶'
-      play.onclick = () => send('play', v.id)
-      const remove = document.createElement('button')
-      remove.textContent = '✕'
-      remove.onclick = () => send('dequeue', v.id)
-      li.append(name, play, remove)
+      // In Music, a song is played by its place in the queue, and the queue is read-only.
+      play.onclick = () => (listening ? send('jump', index + 1) : send('play', v.id))
+      li.append(name, play)
+      if (!listening) {
+        const remove = document.createElement('button')
+        remove.textContent = '✕'
+        remove.onclick = () => send('dequeue', v.id)
+        li.append(remove)
+      }
       return li
     }))
     return true

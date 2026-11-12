@@ -7,6 +7,7 @@ edition = "2024"
 anyhow = "1.0.104"
 axum = "0.8.9"
 crypto_secretbox = "=0.1.1"
+fastrand = "2.5.0"
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 sha2 = "=0.10.9"

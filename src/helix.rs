@@ -1,4 +1,4 @@
-//! Minimal read-only Twitch Helix client (see `docs/twitch-mode.md`).
+//! Minimal read-only Twitch Helix client (see `docs/README-twitch.md`).
 //!
 //! HTTP goes through `curl`, like SponsorBlock and yt-dlp elsewhere, so no TLS crate is needed. The
 //! client secret and the access token are written to curl's config on stdin: they never appear in

@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import * as api from './api'
 import BuildVersion from './BuildVersion'
+import MusicGate from './MusicGate'
 import ProfileGate from './ProfileGate'
 import TwitchGate from './TwitchGate'
 
 const SERVICES: { mode: api.Mode; name: string; note: string; color: string }[] = [
   { mode: 'youtube', name: 'YouTube', note: 'Videos, subscriptions and your own recommendations', color: '#e0443e' },
   { mode: 'twitch', name: 'Twitch', note: 'Live streams, categories and channels', color: '#9146ff' },
+  { mode: 'music', name: 'Music', note: 'Your playlists, favorites and lyrics', color: '#53a888' },
 ]
 
-/** The first screen: choose YouTube or Twitch. Each service has its own profiles and screens. */
+/** The first screen: choose YouTube, Twitch or Music. Each service has its own profiles and screens. */
 export default function ModeGate() {
   const [mode, setMode] = useState<api.Mode | null>(null)
   const [last, setLast] = useState<api.Mode>('youtube')
@@ -60,6 +62,7 @@ export default function ModeGate() {
 
   if (mode === 'youtube') return <ProfileGate onService={() => setMode(null)} />
   if (mode === 'twitch') return <TwitchGate onService={() => setMode(null)} />
+  if (mode === 'music') return <MusicGate onService={() => setMode(null)} />
 
   return (
     <main className="app profiles-page" ref={panel}>

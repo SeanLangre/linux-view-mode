@@ -1,5 +1,5 @@
 //! Twitch's own web API (GraphQL), used **unofficially** and without any registration. It is what
-//! twitch.tv itself calls, with the public client id the website ships. See `docs/twitch-mode.md`:
+//! twitch.tv itself calls, with the public client id the website ships. See `docs/README-twitch.md`:
 //! this is the default until a Twitch application is registered, after which `helix.rs` (the
 //! official API) takes over just by setting `COUCHTUBE_TWITCH_CLIENT_ID` and `_CLIENT_SECRET`.
 //!
@@ -275,7 +275,7 @@ fn scope_prefix(scope: &str) -> String {
 }
 
 /// Escapes a value for a double-quoted curl config string.
-fn quote(text: &str) -> String {
+pub(crate) fn quote(text: &str) -> String {
     text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t")
 }
 

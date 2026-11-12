@@ -32,3 +32,15 @@ export function formatAge(timestamp: number | null | undefined, now = Date.now()
 function trim(n: number): string {
   return n >= 10 ? Math.floor(n).toString() : n.toFixed(1).replace(/\.0$/, '')
 }
+
+/** Index of the lyric line being sung at `position` (lines are `[seconds, text]`, sorted), or -1 before the first. */
+export function lyricLine(lines: [number, string][], position: number): number {
+  let low = 0
+  let high = lines.length
+  while (low < high) {
+    const mid = (low + high) >> 1
+    if (lines[mid][0] <= position) low = mid + 1
+    else high = mid
+  }
+  return low - 1
+}

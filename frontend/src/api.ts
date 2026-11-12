@@ -160,7 +160,7 @@ export async function removeProfile(id: string) {
   if (!response.ok) throw new Error(body?.error ?? `request failed (${response.status})`)
 }
 
-export type Mode = 'youtube' | 'twitch'
+export type Mode = 'youtube' | 'twitch' | 'music'
 export const getMode = () => playback<{ mode: Mode | null }>('mode').then((r) => r.mode)
 export const setMode = (mode: Mode) =>
   fetch('/api/mode', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) })
@@ -281,3 +281,78 @@ export async function forgetPhones() {
   const res = await fetch('/api/remote/devices', { method: 'DELETE' })
   if (!res.ok) throw new Error(`request failed (${res.status})`)
 }
+
+// ---- Music mode -----------------------------------------------------------------------------
+
+/** Music profiles are their own list; they share nothing with the YouTube or Twitch profiles. */
+export type MusicProfile = { id: string; name: string; color: string }
+export type MusicTrack = {
+  id: string; title: string; artist: string | null
+  /** Seconds. */
+  duration: number | null
+  thumb: string
+  state: 'offline' | 'missing' | 'downloading' | 'failed'
+  progress: number | null
+  error: string | null
+  favorite: boolean
+}
+export type MusicPlaylist = { id: number; name: string; count: number }
+export type MusicHomeData = { profile: MusicProfile; playlists: MusicPlaylist[]; favorites: number; recent: MusicTrack[] }
+export type MusicSearchResult = { kind: 'songs' | 'playlist'; title: string | null; items: MusicTrack[]; more: boolean }
+export type MusicState = {
+  playing: boolean; track: MusicTrack | null; next: MusicTrack | null
+  position: number | null; duration: number | null; paused: boolean; loaded: boolean
+  volume: number; muted: boolean; shuffle: boolean; repeat: 'off' | 'all' | 'one'; error: string | null
+}
+export type MusicLyrics = { found: boolean; synced: [number, string][] | null; plain: string | null }
+export type MusicSettings = { cache_limit: number; limits: number[]; files: number; bytes: number }
+export type MusicControl =
+  | { action: 'pause' | 'resume' | 'toggle' | 'next' | 'prev' | 'mute' | 'volume_up' | 'volume_down' | 'stop' }
+  | { action: 'seek' | 'seek_to' | 'jump' | 'volume'; value: number }
+  | { action: 'shuffle'; value?: number }
+  | { action: 'repeat'; name?: 'off' | 'all' | 'one' }
+export type MusicPlay = { playlist_id: number; start?: number; shuffle?: boolean }
+  | { favorites: true; start?: number; shuffle?: boolean }
+  | { recent: true; start?: number }
+  | { video_ids: string[]; start?: number }
+
+async function music<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: object): Promise<T> {
+  const res = await fetch(`/api/music/${path}`, {
+    method, cache: 'no-store',
+    ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+  })
+  const data = await res.json().catch(() => null)
+  if (!res.ok) throw new Error(data?.error ?? `request failed (${res.status})`)
+  return data as T
+}
+const id = encodeURIComponent
+
+export const musicProfiles = () => music<{ profiles: MusicProfile[]; active_id: string }>('GET', 'profiles')
+export const createMusicProfile = (name: string, color: string) => music<MusicProfile>('POST', 'profiles', { name, color })
+export const selectMusicProfile = (profile: string) => music<MusicProfile>('POST', `profiles/${id(profile)}/select`, {})
+export const removeMusicProfile = (profile: string) => music<null>('DELETE', `profiles/${id(profile)}`)
+export const musicHome = () => music<MusicHomeData>('GET', 'home')
+/** `count` is how many results to show (15, 30, … up to 150). A pasted playlist link lists its songs. */
+export const musicSearch = (q: string, count = 15) => music<MusicSearchResult>('GET', `search?q=${id(q)}&count=${count}`)
+export const musicPlaylist = (playlist: number) =>
+  music<{ id: number; name: string; count: number; items: MusicTrack[] }>('GET', `playlists/${playlist}`)
+export const createMusicPlaylist = (name: string) => music<MusicPlaylist>('POST', 'playlists', { name })
+export const renameMusicPlaylist = (playlist: number, name: string) => music<{ id: number; name: string }>('PUT', `playlists/${playlist}`, { name })
+export const deleteMusicPlaylist = (playlist: number) => music<null>('DELETE', `playlists/${playlist}`)
+export const addToMusicPlaylist = (playlist: number, videoIds: string[], importing = false) =>
+  music<{ added: number }>('POST', `playlists/${playlist}/tracks`, { video_ids: videoIds, import: importing })
+export const removeFromMusicPlaylist = (playlist: number, position: number) => music<null>('DELETE', `playlists/${playlist}/tracks/${position}`)
+export const moveInMusicPlaylist = (playlist: number, from: number, to: number) => music<null>('POST', `playlists/${playlist}/move`, { from, to })
+export const musicFavorites = () => music<{ items: MusicTrack[] }>('GET', 'favorites')
+export const setMusicFavorite = (video: string, on: boolean) => music<null>(on ? 'PUT' : 'DELETE', `favorites/${id(video)}`)
+export const musicPlay = (request: MusicPlay) => music<MusicState>('POST', 'play', request)
+export const musicControl = (request: MusicControl) => music<MusicState>('POST', 'control', request)
+export const musicState = () => music<MusicState>('GET', 'state')
+export const musicQueue = () => music<{ items: MusicTrack[] }>('GET', 'queue')
+export const musicLyrics = (video: string) => music<MusicLyrics>('GET', `lyrics/${id(video)}`)
+export const retryMusicDownload = (video: string) => music<null>('POST', `downloads/${id(video)}`, {})
+export const cancelMusicDownload = (video: string) => music<null>('DELETE', `downloads/${id(video)}`)
+export const clearMusicDownloads = () => music<{ removed: number }>('DELETE', 'downloads')
+export const musicSettings = () => music<MusicSettings>('GET', 'settings')
+export const setMusicCacheLimit = (cacheLimit: number) => music<MusicSettings>('PUT', 'settings', { cache_limit: cacheLimit })
+export const musicPlaylists = () => music<{ playlists: MusicPlaylist[] }>('GET', 'playlists').then((r) => r.playlists)
