@@ -1,4 +1,4 @@
-//! Music mode (see `docs/music-plan.md`): profiles, search, playlists, favorites, playback control,
+//! Music mode (see `docs/README-music.md`): profiles, search, playlists, favorites, playback control,
 //! the download cache and lyrics. Everything under `/api/music/`. Playback itself is the
 //! audio-only mpv in `music_player`; this module owns the orchestration and the HTTP surface.
 use std::collections::HashSet;

@@ -1,4 +1,4 @@
-//! Music mode's tables (see `docs/music-plan.md`): profiles, shared song metadata, playlists, favorites,
+//! Music mode's tables (see `docs/README-music.md`): profiles, shared song metadata, playlists, favorites,
 //! play history and cached lyrics. Song metadata and downloaded files are shared by all music
 //! profiles; everything else belongs to one profile.
 use crate::db::Database;
